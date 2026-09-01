@@ -73,7 +73,32 @@ namespace GroundArsenal
             _root.transform.localRotation = Quaternion.identity;
             _hold = new GameObject("GaHold");
             _hold.transform.SetParent(_root.transform, false);
+            Camera cam = Camera.main;
+            if (cam != null)
+                BindToCamera(cam);
             Show(true);
+        }
+
+        internal static void BindToCamera(Camera cam)
+        {
+            if (_root == null || cam == null)
+                return;
+            if (_root.transform.parent != cam.transform)
+            {
+                _root.transform.SetParent(cam.transform, false);
+                _root.transform.localRotation = Quaternion.identity;
+            }
+            ApplyLayer(_root, 0);
+        }
+
+        private static void ApplyLayer(GameObject go, int layer)
+        {
+            if (go == null)
+                return;
+            go.layer = layer;
+            Transform t = go.transform;
+            for (int i = 0; i < t.childCount; i++)
+                ApplyLayer(t.GetChild(i).gameObject, layer);
         }
 
         internal static void Destroy()
@@ -129,7 +154,19 @@ namespace GroundArsenal
         {
             if (_hold == null)
                 return;
+            Camera cam = Camera.main;
+            if (cam != null)
+                BindToCamera(cam);
             Show(false);
+            bool hide = (GaCombat.IsSniper() && GaCombat.Ads > 0.45f)
+                || (GaCombat.IsG11() && GaCombat.Ads > 0.42f);
+            _hold.SetActive(!hide);
+            if (_root != null)
+            {
+                Vector3 adsOff = Vector3.Lerp(Vector3.zero, new Vector3(-0.18f, 0.06f, -0.08f), GaCombat.Ads);
+                _root.transform.localPosition = adsOff;
+                _root.transform.localRotation = Quaternion.identity;
+            }
             float kick = 0f;
             if (Time.time < _kickUntil && _kickDur > 0.01f)
                 kick = (_kickUntil - Time.time) / _kickDur;
@@ -219,7 +256,7 @@ namespace GroundArsenal
             float kickPitch = (_style == 5 || _style == 9) ? 7f : 4f;
             _hold.transform.localRotation = Quaternion.Euler(
                 _holdEuler.x + pitchAdd * reload + kickPitch * kick,
-                180f + _holdEuler.y + yawAdd * reload,
+                _holdEuler.y + yawAdd * reload,
                 _holdEuler.z + rollAdd * reload);
         }
 
@@ -486,9 +523,11 @@ namespace GroundArsenal
             mr.shadowCastingMode = ShadowCastingMode.Off;
             mr.receiveShadows = false;
             mr.lightProbeUsage = LightProbeUsage.Off;
+            mr.allowOcclusionWhenDynamic = false;
+            go.layer = 0;
             go.transform.SetParent(_hold.transform, false);
             go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.identity;
+            go.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
             return go;
         }
 
@@ -507,7 +546,9 @@ namespace GroundArsenal
                 r.sharedMaterial = mat != null ? mat : _unlitCol;
                 r.shadowCastingMode = ShadowCastingMode.Off;
                 r.receiveShadows = false;
+                r.allowOcclusionWhenDynamic = false;
             }
+            go.layer = 0;
             go.transform.SetParent(_hold.transform, false);
             go.transform.localPosition = Vector3.zero;
             go.transform.localRotation = Quaternion.identity;
@@ -545,6 +586,8 @@ namespace GroundArsenal
         private static Material MatFor(GaKit kit)
         {
             EnsureMats();
+            if (_unlitCol == null)
+                return null;
             GaGun g = GaCombat.Current;
             Color paint = Paint(g);
             Texture2D t = null;
@@ -575,7 +618,7 @@ namespace GroundArsenal
                 return new Color(0.35f, 0.35f, 0.36f);
             float h = (g.Id * 0.6180339f) % 1f;
             float s = 0.48f + (g.Id % 5) * 0.09f;
-            float v = 0.42f + ((g.Id * 3) % 7) * 0.06f;
+            float v = 0.58f + ((g.Id * 3) % 7) * 0.05f;
             return Color.HSVToRGB(h, s, v);
         }
 
@@ -594,22 +637,42 @@ namespace GroundArsenal
             return t;
         }
 
-        private static void EnsureMats()
+        private static Shader FindSh()
         {
-            if (_tried)
-                return;
-            _tried = true;
             Shader sh = Shader.Find("Unlit/Texture");
             if (sh == null)
                 sh = Shader.Find("Unlit/Color");
             if (sh == null)
+                sh = Shader.Find("Hidden/Internal-Colored");
+            if (sh == null)
+                sh = Shader.Find("Sprites/Default");
+            if (sh == null)
                 sh = Shader.Find("Standard");
+            if (sh == null)
+                sh = Shader.Find("Diffuse");
+            if (sh == null)
+                sh = Shader.Find("Legacy Shaders/Diffuse");
+            return sh;
+        }
+
+        private static void EnsureMats()
+        {
+            if (_tried && _unlitCol != null && _unlitTex != null)
+                return;
+            _tried = true;
+            Shader sh = FindSh();
+            if (sh == null)
+            {
+                if (GaPlugin.Log != null)
+                    GaPlugin.Log.LogWarning("GroundArsenal: no unlit shader for viewmodels");
+                return;
+            }
             _unlitTex = new Material(sh);
             Shader col = Shader.Find("Unlit/Color");
             if (col == null)
                 col = sh;
             _unlitCol = new Material(col);
-            _unlitCol.color = new Color(0.22f, 0.22f, 0.23f);
+            _unlitCol.color = new Color(0.55f, 0.56f, 0.58f);
             GaKits.Ensure();
             string dir = GaObj.ResolveDir();
             if (GaPlugin.Log != null)

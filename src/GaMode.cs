@@ -17,6 +17,8 @@ namespace GroundArsenal
         internal const int InnerArmor = 1;
         internal static float ArmorFatigue;
         internal static float MoveSpeed;
+        internal static bool Sprinting;
+        internal static float Strafe;
         internal static Transform Eye;
         internal static string DenyMsg;
         internal static float DenyUntil;
@@ -32,6 +34,9 @@ namespace GroundArsenal
         private static Camera _infCam;
         private static float _savedNear = -1f;
         private static bool _savedOcc;
+        private static float _savedFov = 60f;
+        private static int _savedMask = -1;
+        private static float _baseFov = 60f;
         private static bool _haveSavedCam;
         private static CameraMode _savedMode;
         private static bool _savedLook;
@@ -60,6 +65,16 @@ namespace GroundArsenal
         internal static Vector3 EyeFwd
         {
             get { return _eye != null ? _eye.forward : Vector3.forward; }
+        }
+
+        internal static float LookYaw
+        {
+            get { return _yaw; }
+        }
+
+        internal static bool SprintActive
+        {
+            get { return Time.time < _sprintUntil; }
         }
 
         internal static bool IsMenuScene()
@@ -172,10 +187,35 @@ namespace GroundArsenal
                 _infCam = cam;
                 _savedNear = cam.nearClipPlane;
                 _savedOcc = cam.useOcclusionCulling;
+                _savedFov = cam.fieldOfView;
+                _savedMask = cam.cullingMask;
+                if (_baseFov < 5f)
+                    _baseFov = cam.fieldOfView;
                 _haveSavedCam = true;
             }
             if (cam.nearClipPlane > 0.035f)
                 cam.nearClipPlane = 0.03f;
+            cam.useOcclusionCulling = false;
+            cam.cullingMask = cam.cullingMask | 1;
+            float fov = _baseFov;
+            if (fov < 10f)
+                fov = 60f;
+            fov *= GaCombat.FovMul();
+            float floor = 5.5f;
+            if (GaCombat.IsSniper())
+                floor = 3.2f;
+            else if (GaCombat.IsG11())
+                floor = 7.5f;
+            if (fov < floor)
+                fov = floor;
+            if (fov > 95f)
+                fov = 95f;
+            cam.fieldOfView = fov;
+            try { CameraStateManager.cameraMode = CameraMode.free; }
+            catch { }
+            try { CameraStateManager.enableMouseLook = false; }
+            catch { }
+            GaView.BindToCamera(cam);
         }
 
         internal static void HoldFlightControls()
@@ -242,7 +282,7 @@ namespace GroundArsenal
 
         private static void LookMove()
         {
-            float sens = 2.4f;
+            float sens = 2.4f * GaCombat.LookSensMul();
             _yaw += Input.GetAxis("Mouse X") * sens;
             _pitch -= Input.GetAxis("Mouse Y") * sens;
             if (_pitch < -85f) _pitch = -85f;
@@ -254,20 +294,15 @@ namespace GroundArsenal
 
             float walk = 4.6f;
             float sprint = 7.2f;
-            bool wantSprint = Input.GetKey(KeyCode.LeftShift);
             float now = Time.time;
-            if (wantSprint && now >= _sprintReadyAt)
+            if ((Input.GetKeyDown(KeyCode.LeftShift) || Input.GetKeyDown(KeyCode.RightShift))
+                && now >= _sprintReadyAt)
             {
-                if (_sprintUntil < now)
-                    _sprintUntil = now + SprintDur;
+                _sprintUntil = now + SprintDur;
+                _sprintReadyAt = _sprintUntil + SprintCd;
             }
-            bool sprinting = wantSprint && now < _sprintUntil;
-            if (!sprinting && _sprintUntil > 0f && now >= _sprintUntil)
-            {
-                _sprintReadyAt = now + SprintCd;
-                _sprintUntil = 0f;
-            }
-            float speed = sprinting ? sprint : walk;
+            bool burst = now < _sprintUntil;
+            float speed = burst ? sprint * 2f : walk;
             Vector3 wish = Vector3.zero;
             if (Input.GetKey(KeyCode.W)) wish += Vector3.forward;
             if (Input.GetKey(KeyCode.S)) wish += Vector3.back;
@@ -278,17 +313,32 @@ namespace GroundArsenal
             Vector3 world = _pawn != null
                 ? _pawn.transform.TransformDirection(wish) * speed
                 : wish * speed;
-            MoveSpeed = wish.sqrMagnitude > 0.01f ? speed : 0f;
+            MoveSpeed = world.magnitude;
+            Sprinting = burst && wish.sqrMagnitude > 0.01f;
+            Strafe = 0f;
+            if (Input.GetKey(KeyCode.A))
+                Strafe -= 1f;
+            if (Input.GetKey(KeyCode.D))
+                Strafe += 1f;
             if (_cc == null)
                 return;
-            if (_cc.isGrounded)
+            bool grounded = _cc.isGrounded;
+            if (!grounded && _pawn != null)
             {
+                RaycastHit gh;
+                if (Physics.Raycast(_pawn.transform.position + Vector3.up * 0.2f, Vector3.down,
+                    out gh, 0.45f, ~0, QueryTriggerInteraction.Ignore))
+                    grounded = true;
+            }
+            if (grounded && _vertVel < 0f)
                 _vertVel = -2f;
-                if (Input.GetKeyDown(KeyCode.Space) && now >= _jumpReadyAt)
-                {
-                    _vertVel = JumpHeight;
-                    _jumpReadyAt = now + JumpCd;
-                }
+            if (grounded && Input.GetKeyDown(KeyCode.Space) && now >= _jumpReadyAt)
+            {
+                float g = Mathf.Abs(Physics.gravity.y);
+                if (g < 1f)
+                    g = 9.81f;
+                _vertVel = Mathf.Sqrt(2f * g * JumpHeight);
+                _jumpReadyAt = now + JumpCd;
             }
             _vertVel += Physics.gravity.y * Time.deltaTime;
             world.y = _vertVel;
@@ -448,7 +498,12 @@ namespace GroundArsenal
             MoveSpeed = 0f;
             Dead = false;
             _vertVel = 0f;
+            Sprinting = false;
+            Strafe = 0f;
             Active = true;
+            Camera cam0 = Camera.main;
+            if (cam0 != null && cam0.fieldOfView > 5f)
+                _baseFov = cam0.fieldOfView;
             HoldFlightControls();
             try { _savedMode = CameraStateManager.cameraMode; }
             catch { _savedMode = CameraMode.cockpit; }
@@ -498,12 +553,17 @@ namespace GroundArsenal
                 {
                     _infCam.nearClipPlane = _savedNear;
                     _infCam.useOcclusionCulling = _savedOcc;
+                    if (_savedFov > 5f)
+                        _infCam.fieldOfView = _savedFov;
+                    if (_savedMask != -1)
+                        _infCam.cullingMask = _savedMask;
                 }
                 catch { }
             }
             _infCam = null;
             _haveSavedCam = false;
             _savedNear = -1f;
+            _savedMask = -1;
         }
 
         internal static Unit LinkedUnit()
@@ -527,11 +587,31 @@ namespace GroundArsenal
         internal static float SprintFill()
         {
             float now = Time.time;
+            float fill;
             if (now < _sprintUntil)
-                return (_sprintUntil - now) / SprintDur;
-            if (now < _sprintReadyAt)
-                return 1f - (_sprintReadyAt - now) / SprintCd;
-            return 1f;
+                fill = (_sprintUntil - now) / SprintDur;
+            else if (now < _sprintReadyAt)
+                fill = 1f - (_sprintReadyAt - now) / SprintCd;
+            else
+                fill = 1f;
+            if (fill < 0f)
+                fill = 0f;
+            if (fill > 1f)
+                fill = 1f;
+            return fill;
+        }
+
+        internal static float JumpFill()
+        {
+            float now = Time.time;
+            float fill = 1f;
+            if (now < _jumpReadyAt)
+                fill = 1f - (_jumpReadyAt - now) / JumpCd;
+            if (fill < 0f)
+                fill = 0f;
+            if (fill > 1f)
+                fill = 1f;
+            return fill;
         }
 
         internal static float ServoHeat()

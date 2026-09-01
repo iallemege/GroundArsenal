@@ -10,7 +10,7 @@ namespace GroundArsenal
     {
         internal const string GUID = "com.iallemege.groundarsenal";
         internal const string Name = "Ground Arsenal";
-        internal const string Version = "1.1.0";
+        internal const string Version = "1.2.0";
     }
 
     [BepInPlugin(GaInfo.GUID, GaInfo.Name, GaInfo.Version)]

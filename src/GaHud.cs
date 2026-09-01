@@ -15,9 +15,14 @@ namespace GroundArsenal
         private static GUIStyle _small;
         private static GUIStyle _hud;
         private static GUIStyle _tiny;
+        private static GUIStyle _hudTiny;
+        private static GUIStyle _hudTick;
+        private static GUIStyle _title;
         private static GUIStyle _btn;
         private static GUIStyle _btnOn;
         private static Texture2D _px;
+        private static Texture2D _visor;
+        private static Texture2D _scopeMask;
         private static Vector2 _scroll;
         private static Rect _win = new Rect(40f, 40f, 720f, 560f);
         private static int _filterFam = -1;
@@ -69,13 +74,31 @@ namespace GroundArsenal
         internal static void Draw()
         {
             Ensure();
+            if (GaMode.Dead)
+            {
+                Color prevD = GUI.color;
+                GUI.color = new Color(0.02f, 0.04f, 0.04f, 0.72f);
+                GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), _px);
+                GUI.color = new Color(1f, 0.28f, 0.18f, 0.95f);
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.42f, 440f, 28f),
+                    "KIA", _title);
+                GUI.color = new Color(0.75f, 0.9f, 0.85f, 0.9f);
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.48f, 440f, 22f),
+                    "Space / Esc — leave", _tiny);
+                GUI.color = prevD;
+                return;
+            }
+            DrawVisor();
+            DrawCompass();
             DrawSuitPanel();
             DrawSysRail();
+            DrawWeaponStrip();
+            DrawSkillRings();
             DrawHelmetReticle();
-            DrawWeaponBar();
+            DrawAds();
             DrawPerf();
             if (Time.unscaledTime < _flashUntil && !string.IsNullOrEmpty(_flash))
-                GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.38f, 440f, 28f), _flash, _label);
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.22f, 440f, 28f), _flash, _title);
             if (Time.unscaledTime < GaMode.DenyUntil && !string.IsNullOrEmpty(GaMode.DenyMsg))
                 GUI.Label(new Rect(18f, 176f, 720f, 22f), GaMode.DenyMsg, _label);
             if (ArsenalOpen)
@@ -85,6 +108,79 @@ namespace GroundArsenal
             }
             if (CatalogOpen)
                 ArmorCatalogService.Draw();
+        }
+
+        private static void DrawVisor()
+        {
+            EnsureVisor();
+            Color prev = GUI.color;
+            GUI.color = Color.white;
+            if (_visor != null)
+                GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), _visor, ScaleMode.StretchToFill);
+            float brow = 22f;
+            float chin = Screen.height * 0.09f;
+            float leftCut = 236f;
+            float rightCut = 200f;
+            GUI.color = new Color(0.01f, 0.035f, 0.04f, 0.58f);
+            GUI.DrawTexture(new Rect(leftCut, 0f, Screen.width - leftCut - rightCut, brow), _px);
+            GUI.DrawTexture(new Rect(0f, Screen.height - chin, Screen.width, chin), _px);
+            GUI.DrawTexture(new Rect(0f, brow, 12f, Screen.height - chin - brow), _px);
+            GUI.DrawTexture(new Rect(Screen.width - 12f, brow, 12f, Screen.height - chin - brow), _px);
+            GUI.color = new Color(0.2f, 0.95f, 0.82f, 0.42f);
+            GUI.DrawTexture(new Rect(leftCut, brow - 1f, Screen.width - leftCut - rightCut, 1.5f), _px);
+            GUI.DrawTexture(new Rect(0f, Screen.height - chin, Screen.width, 1.5f), _px);
+            GUI.color = new Color(0.2f, 0.95f, 0.82f, 0.55f);
+            DrawBracket(18f, Screen.height - 18f, 1f, -1f);
+            DrawBracket(Screen.width - 18f, Screen.height - 18f, -1f, -1f);
+            GUI.color = prev;
+        }
+
+        private static void DrawBracket(float x, float y, float sx, float sy)
+        {
+            float arm = 28f;
+            float th = 2f;
+            GUI.DrawTexture(new Rect(sx > 0f ? x : x - arm, y - th * 0.5f, arm, th), _px);
+            GUI.DrawTexture(new Rect(x - th * 0.5f, sy > 0f ? y : y - arm, th, arm), _px);
+        }
+
+        private static void DrawCompass()
+        {
+            float yaw = GaMode.LookYaw;
+            float w = 420f;
+            float x = Screen.width * 0.5f - w * 0.5f;
+            float y = 10f;
+            Color prev = GUI.color;
+            GUI.color = new Color(0.02f, 0.08f, 0.09f, 0.62f);
+            GUI.DrawTexture(new Rect(x, y, w, 28f), _px);
+            GUI.color = new Color(0.25f, 0.95f, 0.82f, 0.9f);
+            GUI.DrawTexture(new Rect(Screen.width * 0.5f - 1f, y, 2f, 28f), _px);
+            float pxPerDeg = w / 90f;
+            for (int d = -50; d <= 50; d += 5)
+            {
+                float hdg = Mathf.Repeat(yaw + d + 360f, 360f);
+                float tx = Screen.width * 0.5f + d * pxPerDeg;
+                if (tx < x + 6f || tx > x + w - 6f)
+                    continue;
+                bool major = (Mathf.RoundToInt(hdg) % 15) == 0;
+                float tickH = major ? 10f : 5f;
+                GUI.color = new Color(0.3f, 0.95f, 0.85f, major ? 0.9f : 0.4f);
+                GUI.DrawTexture(new Rect(tx - 0.5f, y + 28f - tickH, 1.5f, tickH), _px);
+                if (!major)
+                    continue;
+                int ih = Mathf.RoundToInt(hdg);
+                if (ih == 360)
+                    ih = 0;
+                string lab = ih.ToString("000");
+                if (ih == 0) lab = "N";
+                else if (ih == 90) lab = "E";
+                else if (ih == 180) lab = "S";
+                else if (ih == 270) lab = "W";
+                GUI.Label(new Rect(tx - 14f, y + 2f, 28f, 16f), lab, _hudTick);
+            }
+            GUI.color = new Color(0.7f, 1f, 0.9f, 0.85f);
+            GUI.Label(new Rect(x + w + 8f, y + 4f, 72f, 20f),
+                Mathf.RoundToInt(Mathf.Repeat(yaw, 360f)).ToString("000") + "°", _hud);
+            GUI.color = prev;
         }
 
         private static void DrawSuitPanel()
@@ -118,7 +214,7 @@ namespace GroundArsenal
             GUI.Label(new Rect(x + 8f, y + 100f, w - 16f, 22f),
                 "SPD " + GaMode.MoveSpeed.ToString("0.0") + " m/s   PWR "
                     + Mathf.RoundToInt(GaMode.SprintFill() * 100f) + "%",
-                _tiny);
+                _hudTiny);
             GUI.color = prev;
         }
 
@@ -135,12 +231,12 @@ namespace GroundArsenal
             GUI.color = new Color(0.35f, 1f, 0.88f, 0.95f);
             GUI.Label(new Rect(x + 8f, y + 4f, w - 12f, 20f), "SUIT BUS", _hud);
             GUI.color = new Color(0.6f, 0.95f, 0.85f, 0.9f);
-            GUI.Label(new Rect(x + 8f, y + 26f, w - 12f, 18f), "LINK  ACTIVE", _tiny);
-            GUI.Label(new Rect(x + 8f, y + 46f, w - 12f, 18f), "OPTICS  STAB", _tiny);
+            GUI.Label(new Rect(x + 8f, y + 26f, w - 12f, 18f), "LINK  ACTIVE", _hudTiny);
+            GUI.Label(new Rect(x + 8f, y + 46f, w - 12f, 18f), "OPTICS  STAB", _hudTiny);
             GUI.Label(new Rect(x + 8f, y + 66f, w - 12f, 18f),
-                "SERVO  " + (GaMode.ServoHeat() >= 0.72f ? "LIMIT" : "READY"), _tiny);
+                "SERVO  " + (GaMode.ServoHeat() >= 0.72f ? "LIMIT" : "READY"), _hudTiny);
             GUI.Label(new Rect(x + 8f, y + 86f, w - 12f, 18f),
-                "PLATE  " + GaMode.OuterEffective() + " / " + GaMode.InnerArmor, _tiny);
+                "PLATE  " + GaMode.OuterEffective() + " / " + GaMode.InnerArmor, _hudTiny);
             GUI.color = prev;
         }
 
@@ -156,6 +252,15 @@ namespace GroundArsenal
             GUI.DrawTexture(new Rect(cx + 5f, cy - 1f, 9f, 2f), _px);
             GUI.DrawTexture(new Rect(cx - 1f, cy - 14f, 2f, 9f), _px);
             GUI.DrawTexture(new Rect(cx - 1f, cy + 5f, 2f, 9f), _px);
+            GUI.DrawTexture(new Rect(cx - 1.5f, cy - 1.5f, 3f, 3f), _px);
+            GUI.DrawTexture(new Rect(cx - 22f, cy - 22f, 8f, 1.5f), _px);
+            GUI.DrawTexture(new Rect(cx - 22f, cy - 22f, 1.5f, 8f), _px);
+            GUI.DrawTexture(new Rect(cx + 14f, cy - 22f, 8f, 1.5f), _px);
+            GUI.DrawTexture(new Rect(cx + 20.5f, cy - 22f, 1.5f, 8f), _px);
+            GUI.DrawTexture(new Rect(cx - 22f, cy + 20.5f, 8f, 1.5f), _px);
+            GUI.DrawTexture(new Rect(cx - 22f, cy + 14f, 1.5f, 8f), _px);
+            GUI.DrawTexture(new Rect(cx + 14f, cy + 20.5f, 8f, 1.5f), _px);
+            GUI.DrawTexture(new Rect(cx + 20.5f, cy + 14f, 1.5f, 8f), _px);
             RaycastHit hit;
             float rng = 0f;
             if (Physics.Raycast(GaMode.EyePos, GaMode.EyeFwd, out hit, 2400f, ~0, QueryTriggerInteraction.Ignore))
@@ -163,38 +268,249 @@ namespace GroundArsenal
             GUI.color = new Color(0.45f, 1f, 0.88f, 0.75f);
             GUI.Label(new Rect(cx - 40f, cy + 26f, 80f, 14f),
                 rng > 0.4f ? ("RNG " + Mathf.RoundToInt(rng).ToString() + "m") : "RNG ----",
-                _tiny);
+                _hudTiny);
             GUI.color = prev;
         }
 
-        private static void DrawWeaponBar()
+        private static void DrawWeaponStrip()
         {
+            GaIcons.Ensure();
             GaGun g = GaCombat.Current;
             string n = g != null ? g.En : "?";
             string ammo = "";
             if (g != null)
                 ammo = GaCombat.Mag[g.Id].ToString() + " / " + GaCombat.Reserve[g.Id].ToString();
+            float x = 18f;
+            float barY = Screen.height - 96f;
+            Color prev = GUI.color;
+            GUI.color = new Color(0.02f, 0.08f, 0.09f, 0.78f);
+            GUI.DrawTexture(new Rect(x, barY, 460f, 80f), _px);
+            GUI.color = new Color(0.25f, 0.95f, 0.82f, 0.7f);
+            GUI.DrawTexture(new Rect(x, barY, 460f, 2f), _px);
             GUI.color = Color.white;
-            GUI.Label(new Rect(18f, Screen.height - 52f, 720f, 22f),
-                (GaCombat.Slot + 1).ToString() + "  " + n + "  " + ammo, _label);
+            Texture2D cur = g != null ? GaIcons.Get(g) : null;
+            float tx = x + 10f;
+            if (cur != null)
+            {
+                GUI.DrawTexture(new Rect(x + 8f, barY + 6f, 140f, 68f), cur, ScaleMode.ScaleToFit);
+                tx = x + 156f;
+            }
+            GUI.Label(new Rect(tx, barY + 6f, 290f, 22f),
+                "[" + (GaCombat.Slot + 1).ToString() + "]  " + n + "  " + ammo, _hud);
             if (g != null)
             {
-                GUI.Label(new Rect(18f, Screen.height - 74f, 720f, 20f),
+                GUI.Label(new Rect(tx, barY + 28f, 290f, 18f),
                     g.Kind + "  PEN " + Mathf.RoundToInt(g.Pen).ToString()
                         + "  KE " + Mathf.RoundToInt(GaCombat.Kinetic(g)).ToString()
-                        + "  " + GaCatalog.CostM(g).ToString("0.00") + "M"
-                        + "  " + GaCatalog.FireName(g.Fire, false), _small);
+                        + "  " + GaCatalog.FireName(g.Fire, false), _hudTiny);
             }
-            float x = 18f;
-            for (int i = 0; i < GaCombat.Hotbar.Length; i++)
+            GUI.Label(new Rect(tx, barY + 48f, 290f, 16f),
+                "G arsenal   U board   RMB ads   SHIFT sprint", _tiny);
+            GUI.color = prev;
+        }
+
+        private static void DrawSkillRings()
+        {
+            float cx = Screen.width * 0.5f;
+            float y = Screen.height - 148f;
+            DrawRing(new Vector2(cx - 54f, y), 28f,
+                GaMode.SprintFill(),
+                GaMode.SprintActive,
+                "SPRINT",
+                "SHIFT");
+            DrawRing(new Vector2(cx + 54f, y), 28f,
+                GaMode.JumpFill(),
+                false,
+                "JUMP",
+                "SPACE");
+        }
+
+        private static void DrawRing(Vector2 c, float r, float fill, bool active, string name, string key)
+        {
+            Color prev = GUI.color;
+            int segs = 36;
+            float f = fill;
+            if (f < 0f) f = 0f;
+            if (f > 1f) f = 1f;
+            Color on = active ? new Color(0.35f, 0.95f, 1f, 0.95f) : new Color(0.4f, 1f, 0.45f, 0.95f);
+            Color off = new Color(0.15f, 0.18f, 0.16f, 0.7f);
+            for (int i = 0; i < segs; i++)
             {
-                GUI.color = i == GaCombat.Slot ? new Color(1f, 0.85f, 0.2f) : Color.white;
-                GUI.Label(new Rect(x, Screen.height - 98f, 70f, 18f), (i + 1).ToString(), _small);
-                x += 22f;
+                float t = (i + 0.5f) / segs;
+                GUI.color = t <= f ? on : off;
+                float a = (i / (float)segs) * 360f * Mathf.Deg2Rad;
+                float x = c.x + Mathf.Sin(a) * r;
+                float y = c.y - Mathf.Cos(a) * r;
+                GUI.DrawTexture(new Rect(x - 2.5f, y - 2.5f, 5f, 5f), _px);
             }
             GUI.color = Color.white;
-            GUI.Label(new Rect(18f, 12f, 900f, 20f),
-                "G arsenal   ' armor table   1-9 / wheel   U board   Shift sprint   Space jump", _small);
+            GUI.Label(new Rect(c.x - 36f, c.y - 10f, 72f, 16f), name, _tiny);
+            GUI.Label(new Rect(c.x - 36f, c.y + 6f, 72f, 14f), key, _tiny);
+            GUI.color = prev;
+        }
+
+        private static void DrawAds()
+        {
+            if (GaCombat.Ads < 0.28f)
+                return;
+            if (GaCombat.IsG11())
+            {
+                DrawG11Optic();
+                return;
+            }
+            EnsureScopeMask();
+            float cx = Screen.width * 0.5f;
+            float cy = Screen.height * 0.5f;
+            float a = GaCombat.Ads;
+            bool sniper = GaCombat.IsSniper();
+            float fill = sniper
+                ? Mathf.Lerp(0.78f, 0.96f, GaCombat.Zoom)
+                : Mathf.Lerp(0.48f, 0.70f, GaCombat.Zoom);
+            float side = Mathf.Min(Screen.width, Screen.height) * fill;
+            Rect hole = new Rect(cx - side * 0.5f, cy - side * 0.5f, side, side);
+            Color prev = GUI.color;
+            GUI.color = new Color(0.01f, 0.015f, 0.02f, 0.93f * a);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, hole.y), _px);
+            GUI.DrawTexture(new Rect(0f, hole.yMax, Screen.width, Screen.height - hole.yMax), _px);
+            GUI.DrawTexture(new Rect(0f, hole.y, hole.x, hole.height), _px);
+            GUI.DrawTexture(new Rect(hole.xMax, hole.y, Screen.width - hole.xMax, hole.height), _px);
+            GUI.color = new Color(1f, 1f, 1f, a);
+            if (_scopeMask != null)
+                GUI.DrawTexture(hole, _scopeMask, ScaleMode.StretchToFill);
+            DrawScopeReticle(cx, cy, side * 0.5f, a, sniper);
+            GUI.color = new Color(0.75f, 0.88f, 0.8f, 0.8f * a);
+            GUI.Label(new Rect(cx - 50f, cy + side * 0.36f, 100f, 16f),
+                GaCombat.ZoomPower().ToString("0.0") + "x", _tiny);
+            GUI.color = prev;
+        }
+
+        private static void DrawG11Optic()
+        {
+            float a = GaCombat.Ads;
+            float cx = Screen.width * 0.5f;
+            float cy = Screen.height * 0.5f;
+            float bw = Mathf.Min(Screen.width, Screen.height) * Mathf.Lerp(0.42f, 0.58f, GaCombat.Zoom);
+            float bh = bw * 0.62f;
+            Rect hole = new Rect(cx - bw * 0.5f, cy - bh * 0.5f, bw, bh);
+            Color prev = GUI.color;
+            GUI.color = new Color(0.01f, 0.03f, 0.04f, 0.94f * a);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, hole.y), _px);
+            GUI.DrawTexture(new Rect(0f, hole.yMax, Screen.width, Screen.height - hole.yMax), _px);
+            GUI.DrawTexture(new Rect(0f, hole.y, hole.x, hole.height), _px);
+            GUI.DrawTexture(new Rect(hole.xMax, hole.y, Screen.width - hole.xMax, hole.height), _px);
+            GUI.color = new Color(0.02f, 0.08f, 0.09f, 0.35f * a);
+            GUI.DrawTexture(hole, _px);
+            float th = 3f;
+            GUI.color = new Color(0.25f, 0.95f, 0.82f, 0.88f * a);
+            GUI.DrawTexture(new Rect(hole.x, hole.y, hole.width, th), _px);
+            GUI.DrawTexture(new Rect(hole.x, hole.yMax - th, hole.width, th), _px);
+            GUI.DrawTexture(new Rect(hole.x, hole.y, th, hole.height), _px);
+            GUI.DrawTexture(new Rect(hole.xMax - th, hole.y, th, hole.height), _px);
+            float inset = 10f;
+            GUI.color = new Color(0.2f, 0.9f, 0.78f, 0.45f * a);
+            GUI.DrawTexture(new Rect(hole.x + inset, hole.y + inset, hole.width - inset * 2f, 1.5f), _px);
+            GUI.DrawTexture(new Rect(hole.x + inset, hole.yMax - inset, hole.width - inset * 2f, 1.5f), _px);
+            GUI.DrawTexture(new Rect(hole.x + inset, hole.y + inset, 1.5f, hole.height - inset * 2f), _px);
+            GUI.DrawTexture(new Rect(hole.xMax - inset, hole.y + inset, 1.5f, hole.height - inset * 2f), _px);
+            GUI.color = new Color(0.3f, 1f, 0.85f, 0.9f * a);
+            GUI.DrawTexture(new Rect(cx - 18f, cy - 1.5f, 12f, 3f), _px);
+            GUI.DrawTexture(new Rect(cx + 6f, cy - 1.5f, 12f, 3f), _px);
+            GUI.DrawTexture(new Rect(cx - 1.5f, cy + 6f, 3f, 14f), _px);
+            GUI.DrawTexture(new Rect(cx - 3f, cy - 3f, 6f, 6f), _px);
+            GUI.color = new Color(0.55f, 1f, 0.88f, 0.8f * a);
+            GUI.Label(new Rect(hole.x + 12f, hole.y + 8f, 180f, 16f), "G11  SMART  4.73", _hud);
+            GUI.Label(new Rect(hole.xMax - 90f, hole.y + 8f, 80f, 16f),
+                GaCombat.ZoomPower().ToString("0.0") + "x", _hudTiny);
+            GUI.Label(new Rect(cx - 70f, hole.yMax - 22f, 140f, 16f), "SEEK ON FIRE", _hudTiny);
+            GUI.color = prev;
+        }
+
+        private static void DrawScopeReticle(float cx, float cy, float r, float a, bool sniper)
+        {
+            Color line = sniper
+                ? new Color(0.12f, 0.95f, 0.55f, 0.88f * a)
+                : new Color(0.85f, 0.95f, 0.88f, 0.8f * a);
+            GUI.color = line;
+            float arm = sniper ? r * 0.72f : r * 0.38f;
+            float gap = sniper ? 10f : 7f;
+            float th = 1.6f;
+            GUI.DrawTexture(new Rect(cx - arm, cy - th * 0.5f, arm - gap, th), _px);
+            GUI.DrawTexture(new Rect(cx + gap, cy - th * 0.5f, arm - gap, th), _px);
+            GUI.DrawTexture(new Rect(cx - th * 0.5f, cy - arm, th, arm - gap), _px);
+            GUI.DrawTexture(new Rect(cx - th * 0.5f, cy + gap, th, arm - gap), _px);
+            GUI.DrawTexture(new Rect(cx - 2f, cy - 2f, 4f, 4f), _px);
+            if (!sniper)
+                return;
+            float[] ticks = new float[] { 0.18f, 0.34f, 0.5f };
+            for (int i = 0; i < ticks.Length; i++)
+            {
+                float d = r * ticks[i];
+                float tick = i == ticks.Length - 1 ? 9f : 6f;
+                GUI.DrawTexture(new Rect(cx - d - 1f, cy - tick * 0.5f, 2f, tick), _px);
+                GUI.DrawTexture(new Rect(cx + d - 1f, cy - tick * 0.5f, 2f, tick), _px);
+                GUI.DrawTexture(new Rect(cx - tick * 0.5f, cy - d - 1f, tick, 2f), _px);
+                GUI.DrawTexture(new Rect(cx - tick * 0.5f, cy + d - 1f, tick, 2f), _px);
+            }
+        }
+
+        private static void EnsureVisor()
+        {
+            if (_visor != null)
+                return;
+            int n = 128;
+            _visor = new Texture2D(n, n, TextureFormat.ARGB32, false);
+            _visor.wrapMode = TextureWrapMode.Clamp;
+            _visor.filterMode = FilterMode.Bilinear;
+            Color[] px = new Color[n * n];
+            float c = (n - 1) * 0.5f;
+            for (int y = 0; y < n; y++)
+            {
+                for (int x = 0; x < n; x++)
+                {
+                    float nx = Mathf.Abs(x - c) / c;
+                    float ny = Mathf.Abs(y - c) / c;
+                    float e = Mathf.Max(nx, ny);
+                    float a = 0f;
+                    if (e > 0.62f)
+                        a = Mathf.Pow(Mathf.InverseLerp(0.62f, 1f, e), 1.35f) * 0.62f;
+                    px[y * n + x] = new Color(0.01f, 0.04f, 0.05f, a);
+                }
+            }
+            _visor.SetPixels(px);
+            _visor.Apply(false, true);
+        }
+
+        private static void EnsureScopeMask()
+        {
+            if (_scopeMask != null)
+                return;
+            int n = 256;
+            _scopeMask = new Texture2D(n, n, TextureFormat.ARGB32, false);
+            _scopeMask.wrapMode = TextureWrapMode.Clamp;
+            _scopeMask.filterMode = FilterMode.Bilinear;
+            Color[] px = new Color[n * n];
+            float c = (n - 1) * 0.5f;
+            float r0 = c * 0.84f;
+            float r1 = c * 0.99f;
+            for (int y = 0; y < n; y++)
+            {
+                for (int x = 0; x < n; x++)
+                {
+                    float dx = x - c;
+                    float dy = y - c;
+                    float rr = Mathf.Sqrt(dx * dx + dy * dy);
+                    float alpha;
+                    if (rr < r0)
+                        alpha = 0f;
+                    else if (rr > r1)
+                        alpha = 0.96f;
+                    else
+                        alpha = Mathf.InverseLerp(r0, r1, rr) * 0.96f;
+                    px[y * n + x] = new Color(0.02f, 0.03f, 0.03f, alpha);
+                }
+            }
+            _scopeMask.SetPixels(px);
+            _scopeMask.Apply(false, true);
         }
 
         private static void DrawPerf()
@@ -209,7 +525,7 @@ namespace GroundArsenal
                 + "  standalone"
                 + (GaOritasy.HasModularArmor ? "  Oritasy-AP" : "  GA-AP");
             GUI.color = new Color(0.55f, 1f, 0.75f, 0.85f);
-            GUI.Label(new Rect(18f, Screen.height - 118f, 720f, 18f), line, _tiny);
+            GUI.Label(new Rect(18f, Screen.height - 178f, 720f, 18f), line, _hudTiny);
             GUI.color = Color.white;
         }
 
@@ -223,7 +539,7 @@ namespace GroundArsenal
             GUI.color = col;
             GUI.DrawTexture(new Rect(x, y + 14f, w * fill, 6f), _px);
             GUI.color = new Color(0.8f, 0.95f, 0.9f, 0.9f);
-            GUI.Label(new Rect(x, y, w, 18f), label, _tiny);
+            GUI.Label(new Rect(x, y, w, 18f), label, _hudTiny);
             GUI.color = prev;
         }
 
@@ -293,10 +609,31 @@ namespace GroundArsenal
             _hud = new GUIStyle(GUI.skin.label);
             _hud.fontSize = 13;
             _hud.fontStyle = FontStyle.Bold;
+            _hud.alignment = TextAnchor.UpperLeft;
+            _hud.clipping = TextClipping.Overflow;
+            _hud.wordWrap = false;
             _hud.normal.textColor = new Color(0.35f, 1f, 0.88f);
             _tiny = new GUIStyle(GUI.skin.label);
             _tiny.fontSize = 11;
-            _tiny.normal.textColor = new Color(0.7f, 0.95f, 0.88f);
+            _tiny.alignment = TextAnchor.MiddleCenter;
+            _tiny.normal.textColor = new Color(0.75f, 0.8f, 0.78f);
+            _hudTiny = new GUIStyle(GUI.skin.label);
+            _hudTiny.fontSize = 12;
+            _hudTiny.alignment = TextAnchor.UpperLeft;
+            _hudTiny.clipping = TextClipping.Overflow;
+            _hudTiny.wordWrap = false;
+            _hudTiny.normal.textColor = new Color(0.55f, 0.95f, 0.85f);
+            _hudTick = new GUIStyle(GUI.skin.label);
+            _hudTick.fontSize = 11;
+            _hudTick.alignment = TextAnchor.MiddleCenter;
+            _hudTick.clipping = TextClipping.Overflow;
+            _hudTick.wordWrap = false;
+            _hudTick.normal.textColor = new Color(0.55f, 0.95f, 0.85f);
+            _title = new GUIStyle(GUI.skin.label);
+            _title.fontSize = 16;
+            _title.fontStyle = FontStyle.Bold;
+            _title.alignment = TextAnchor.MiddleCenter;
+            _title.normal.textColor = new Color(0.75f, 1f, 0.8f);
             _btn = new GUIStyle(GUI.skin.button);
             _btn.fontSize = 12;
             _btn.alignment = TextAnchor.MiddleLeft;

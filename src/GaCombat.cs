@@ -16,6 +16,7 @@ namespace GroundArsenal
         internal static float NextShotAt;
         internal static float ReloadUntil;
         internal static float Ads;
+        internal static float Zoom;
         internal static string Status = "";
         private static int _reloadId = -1;
         private static int _reloadTake;
@@ -163,8 +164,9 @@ namespace GroundArsenal
             if (GaHud.BlocksLook)
                 return;
             WheelAndKeys();
-            float wantAds = Input.GetMouseButton(1) ? 1f : 0f;
-            Ads = Mathf.MoveTowards(Ads, wantAds, dt * 6f);
+            bool adsWant = CanAds() && Input.GetMouseButton(1);
+            Ads = Mathf.MoveTowards(Ads, adsWant ? 1f : 0f, dt * 7f);
+            PollZoom(adsWant);
             if (Time.time < ReloadUntil)
             {
                 Status = GaMode.Zh ? "装填" : "RELOAD";
@@ -197,13 +199,88 @@ namespace GroundArsenal
             GaFx.Muzzle(muzzle);
         }
 
+        internal static bool CanAds()
+        {
+            GaGun g = Current;
+            if (g == null)
+                return false;
+            if (g.Fire == 4)
+                return false;
+            if (g.Family == 13 || g.Family == 14)
+                return false;
+            if (g.Body == "at4.obj" || g.Body == "q_RPG7.obj" || g.Body == "rbs70.obj")
+                return false;
+            return true;
+        }
+
+        internal static bool IsSniper()
+        {
+            GaGun g = Current;
+            return g != null && g.Family == 10;
+        }
+
+        internal static bool IsG11()
+        {
+            GaGun g = Current;
+            return g != null && g.Body == "g11.obj";
+        }
+
+        internal static float FovMul()
+        {
+            float tight = 0.42f;
+            if (IsSniper())
+                tight = Mathf.Lerp(0.16f, 0.038f, Zoom);
+            else if (IsG11())
+                tight = Mathf.Lerp(0.38f, 0.18f, Zoom);
+            else if (Current != null && Current.Family <= 1)
+                tight = Mathf.Lerp(0.72f, 0.42f, Zoom);
+            else
+                tight = Mathf.Lerp(0.40f, 0.16f, Zoom);
+            return Mathf.Lerp(1f, tight, Ads);
+        }
+
+        internal static float LookSensMul()
+        {
+            if (Ads < 0.04f)
+                return 1f;
+            float z = 1f - Zoom * 0.72f;
+            if (z < 0.18f)
+                z = 0.18f;
+            return Mathf.Lerp(1f, z * 0.42f, Ads);
+        }
+
+        internal static float ZoomPower()
+        {
+            float m = FovMul();
+            if (m < 0.02f)
+                m = 0.02f;
+            return 1f / m;
+        }
+
+        private static void PollZoom(bool adsHeld)
+        {
+            if (!CanAds() || GaHud.BlocksLook)
+                return;
+            if (!adsHeld && Ads < 0.2f)
+                return;
+            float wh = Input.GetAxis("Mouse ScrollWheel");
+            if (wh > 0.01f)
+                Zoom = Mathf.Clamp01(Zoom + 0.11f);
+            else if (wh < -0.01f)
+                Zoom = Mathf.Clamp01(Zoom - 0.11f);
+        }
+
         private static void WheelAndKeys()
         {
+            bool adsHeld = CanAds() && Input.GetMouseButton(1);
             float w = Input.GetAxis("Mouse ScrollWheel");
-            if (w > 0.01f)
-                Slot = (Slot + 1) % Hotbar.Length;
-            else if (w < -0.01f)
-                Slot = (Slot + Hotbar.Length - 1) % Hotbar.Length;
+            if (!adsHeld)
+            {
+                if (w > 0.01f)
+                    Slot = (Slot + 1) % Hotbar.Length;
+                else if (w < -0.01f)
+                    Slot = (Slot + Hotbar.Length - 1) % Hotbar.Length;
+            }
             for (int i = 0; i < 9; i++)
             {
                 if (Input.GetKeyDown(KeyCode.Alpha1 + i))
@@ -623,6 +700,8 @@ namespace GroundArsenal
 
         internal static void AttachViews(Transform eye)
         {
+            Ads = 0f;
+            Zoom = 0f;
             GaView.Attach(eye);
         }
 
