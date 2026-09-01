@@ -1,0 +1,9 @@
+Ground Arsenal weapon families:
+
+- fam_00..06, fam_09..11: Quaternius Ultimate Guns Pack (CC0 / public domain)
+  https://opengameart.org/content/low-poly-guns-pack
+- fam_07 (M16), fam_08 (AK-47), fam_13 (RPG-7): OpenGameArt byzmod3d CC0
+- fam_12, fam_14, fam_15, AT-4 analogue: original low-poly
+- Albedo PNGs: original generated maps
+
+Do not include paid CGTrader / Unity Asset Store meshes.
