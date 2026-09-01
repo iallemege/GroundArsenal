@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
-using UnityEngine.Rendering;
 
 namespace GroundArsenal
 {
@@ -10,15 +8,6 @@ namespace GroundArsenal
     {
         internal const string PrefHotbar = "GroundArsenal.Hotbar";
         internal const string PrefCarry = "GroundArsenal.Carry";
-
-        private static Mesh[] _famMesh;
-        private static Texture2D[] _famTex;
-        private static Material[] _famMat;
-        private static bool _tried;
-        private static GameObject _viewRoot;
-        private static GameObject[] _famGo;
-        private static Material _unlitTex;
-        private static Material _unlitCol;
 
         internal static int[] Hotbar = DefaultHotbar();
         internal static int Slot;
@@ -28,15 +17,18 @@ namespace GroundArsenal
         internal static float ReloadUntil;
         internal static float Ads;
         internal static string Status = "";
+        private static int _reloadId = -1;
+        private static int _reloadTake;
 
         private class Bolt
         {
-            internal Vector3 P;
+            internal GameObject Go;
             internal Vector3 V;
             internal float Life;
             internal float Dmg;
             internal float Pen;
             internal Color Col;
+            internal GaGun Gun;
         }
 
         private static readonly List<Bolt> Bolts = new List<Bolt>(32);
@@ -48,7 +40,18 @@ namespace GroundArsenal
 
         internal static int[] DefaultHotbar()
         {
-            return new int[] { 0, 18, 56, 80, 132, 196, 228, 240, 268 };
+            return new int[]
+            {
+                GaCatalog.FindBody("rev_body.obj"),
+                GaCatalog.FindBody("pistol_body.obj"),
+                GaCatalog.FindBody("q_SubmachineGun_1.obj"),
+                GaCatalog.FindBody("q_Shotgun_1.obj"),
+                GaCatalog.FindBody("q_M16.obj"),
+                GaCatalog.FindBody("q_AK47.obj"),
+                GaCatalog.FindBody("q_SniperRifle_1.obj"),
+                GaCatalog.FindBody("q_RPG7.obj"),
+                GaCatalog.FindBody("at4.obj")
+            };
         }
 
         internal static void LoadPrefs()
@@ -89,12 +92,32 @@ namespace GroundArsenal
 
         internal static int LoadCarry()
         {
-            int id = 18;
-            try { id = PlayerPrefs.GetInt(PrefCarry, 18); }
+            int id = GaCatalog.FindBody("pistol_body.obj");
+            try { id = PlayerPrefs.GetInt(PrefCarry, id); }
             catch { }
             if (id < 0 || id >= GaCatalog.Count)
                 id = 18;
             return id;
+        }
+
+        internal static float KitCostM()
+        {
+            bool[] seen = new bool[GaCatalog.Count];
+            float sum = 0f;
+            for (int i = 0; i < Hotbar.Length; i++)
+            {
+                int id = Hotbar[i];
+                if (id < 0 || id >= GaCatalog.Count || seen[id])
+                    continue;
+                seen[id] = true;
+                sum += GaCatalog.CostM(GaCatalog.Get(id));
+            }
+            return sum;
+        }
+
+        internal static float CarryCostM()
+        {
+            return GaCatalog.CostM(GaCatalog.Get(LoadCarry()));
         }
 
         internal static void ApplyHangarKit()
@@ -136,6 +159,7 @@ namespace GroundArsenal
             if (eye == null)
                 return;
             TickBolts(dt);
+            GaView.Tick();
             if (GaHud.BlocksLook)
                 return;
             WheelAndKeys();
@@ -146,6 +170,7 @@ namespace GroundArsenal
                 Status = GaMode.Zh ? "装填" : "RELOAD";
                 return;
             }
+            FinishReload();
             GaGun g = Current;
             if (g == null)
                 return;
@@ -167,6 +192,9 @@ namespace GroundArsenal
                 return;
             }
             Shoot(eye, g);
+            GaView.PlayFire();
+            Vector3 muzzle = eye.position + eye.forward * 0.42f + eye.right * 0.14f - eye.up * 0.08f;
+            GaFx.Muzzle(muzzle);
         }
 
         private static void WheelAndKeys()
@@ -181,7 +209,7 @@ namespace GroundArsenal
                 if (Input.GetKeyDown(KeyCode.Alpha1 + i))
                     Slot = i;
             }
-            ShowFam(Current);
+            GaView.ShowCurrent();
         }
 
         private static void StartReload(GaGun g)
@@ -190,13 +218,28 @@ namespace GroundArsenal
                 return;
             if (Reserve[g.Id] <= 0 || Mag[g.Id] >= g.Mag)
                 return;
-            ReloadUntil = Time.time + (g.Fire == 4 ? 2.4f : 1.6f);
             int need = g.Mag - Mag[g.Id];
             int take = need;
             if (take > Reserve[g.Id])
                 take = Reserve[g.Id];
-            Mag[g.Id] += take;
-            Reserve[g.Id] -= take;
+            if (take <= 0)
+                return;
+            _reloadId = g.Id;
+            _reloadTake = take;
+            ReloadUntil = Time.time + (g.Fire == 4 ? 2.4f : 1.7f);
+            GaView.PlayReload(g);
+        }
+
+        private static void FinishReload()
+        {
+            if (_reloadId < 0)
+                return;
+            Mag[_reloadId] += _reloadTake;
+            Reserve[_reloadId] -= _reloadTake;
+            if (Reserve[_reloadId] < 0)
+                Reserve[_reloadId] = 0;
+            _reloadId = -1;
+            _reloadTake = 0;
         }
 
         private static void Shoot(Transform eye, GaGun g)
@@ -206,6 +249,7 @@ namespace GroundArsenal
             NextShotAt = Time.time + interval;
             int pellets = g.Fire == 3 ? 8 : 1;
             float spread = g.Spread * (1f - Ads * 0.7f);
+            Vector3 origin = eye.position + eye.forward * 0.35f;
             for (int i = 0; i < pellets; i++)
             {
                 Vector3 dir = eye.forward;
@@ -213,9 +257,9 @@ namespace GroundArsenal
                 dir += eye.up * UnityEngine.Random.Range(-spread, spread);
                 dir.Normalize();
                 if (g.Fire == 4)
-                    SpawnBolt(eye.position + eye.forward * 0.4f, dir * 90f, g);
+                    SpawnBolt(origin + dir * 0.7f, dir * 90f, g);
                 else
-                    Hitscan(eye.position, dir, g);
+                    Hitscan(origin, dir, g);
             }
             Status = Mag[g.Id].ToString() + " / " + Reserve[g.Id].ToString();
         }
@@ -224,25 +268,37 @@ namespace GroundArsenal
         {
             RaycastHit hit;
             float dist = g.Range > 10f ? g.Range : 80f;
-            if (Physics.Raycast(origin, dir, out hit, dist, ~0, QueryTriggerInteraction.Ignore))
+            if (WeaponRay(origin, dir, dist, out hit))
             {
-                HurtHit(hit, g);
+                HurtHit(hit, g, dir);
                 GaFx.Spark(hit.point, hit.normal, g.Tracer);
-                GaFx.Tracer(origin, hit.point, g.Tracer);
+                if (GaConfig.WantTracers())
+                    GaFx.Tracer(origin, hit.point, g.Tracer);
             }
-            else
+            else if (GaConfig.WantTracers())
                 GaFx.Tracer(origin, origin + dir * dist, g.Tracer);
         }
 
         private static void SpawnBolt(Vector3 p, Vector3 v, GaGun g)
         {
+            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            go.name = "GaRocket";
+            Vector3 dir = v.sqrMagnitude > 0.01f ? v.normalized : Vector3.forward;
+            go.transform.position = p;
+            go.transform.rotation = Quaternion.LookRotation(dir) * Quaternion.Euler(90f, 0f, 0f);
+            go.transform.localScale = new Vector3(0.045f, 0.18f, 0.045f);
+            Collider col = go.GetComponent<Collider>();
+            if (col != null)
+                UnityEngine.Object.Destroy(col);
+            GaFx.DressBolt(go, g.Tracer);
             Bolt b = new Bolt();
-            b.P = p;
+            b.Go = go;
             b.V = v;
             b.Life = 4f;
             b.Dmg = g.Damage;
             b.Pen = g.Pen;
             b.Col = g.Tracer;
+            b.Gun = g;
             Bolts.Add(b);
         }
 
@@ -251,31 +307,206 @@ namespace GroundArsenal
             for (int i = Bolts.Count - 1; i >= 0; i--)
             {
                 Bolt b = Bolts[i];
-                Vector3 np = b.P + b.V * dt;
-                RaycastHit hit;
-                if (Physics.Linecast(b.P, np, out hit, ~0, QueryTriggerInteraction.Ignore))
+                if (b.Go == null)
                 {
-                    GaGun dummy = Current;
-                    HurtHit(hit, dummy);
-                    GaFx.Spark(hit.point, hit.normal, b.Col);
                     Bolts.RemoveAt(i);
                     continue;
                 }
-                GaFx.Tracer(b.P, np, b.Col);
-                b.P = np;
+                Vector3 p = b.Go.transform.position;
+                Vector3 np = p + b.V * dt;
+                RaycastHit hit;
+                if (WeaponLine(p, np, out hit))
+                {
+                    GaGun g = b.Gun != null ? b.Gun : Current;
+                    HurtHit(hit, g, b.V.sqrMagnitude > 0.01f ? b.V.normalized : Vector3.forward);
+                    GaFx.Spark(hit.point, hit.normal, b.Col);
+                    GaFx.Blast(hit.point);
+                    UnityEngine.Object.Destroy(b.Go);
+                    Bolts.RemoveAt(i);
+                    continue;
+                }
+                b.Go.transform.position = np;
+                if (b.V.sqrMagnitude > 0.01f)
+                    b.Go.transform.rotation = Quaternion.LookRotation(b.V.normalized)
+                        * Quaternion.Euler(90f, 0f, 0f);
                 b.Life -= dt;
                 if (b.Life <= 0f)
+                {
+                    GaFx.Blast(np);
+                    UnityEngine.Object.Destroy(b.Go);
                     Bolts.RemoveAt(i);
+                }
             }
         }
 
-        private static void HurtHit(RaycastHit hit, GaGun g)
+        internal static int PenGrade(GaGun g)
+        {
+            if (g == null)
+                return 4;
+            return GaArmorMath.ClampGrade(Mathf.RoundToInt(g.Pen));
+        }
+
+        internal static bool IsPureKe(GaGun g)
+        {
+            if (g == null)
+                return true;
+            return g.Kind == "KE";
+        }
+
+        internal static float Kinetic(GaGun g)
+        {
+            if (g == null)
+                return 10f;
+            if (g.Body == "at4.obj")
+                return 70f;
+            if (g.Body == "q_RPG7.obj")
+                return 58f;
+            if (g.Body == "rbs70.obj")
+                return 40f;
+            if (g.Body == "g11.obj")
+                return 26f;
+            if (g.Family == 0)
+                return 14f;
+            if (g.Family == 1)
+                return 10f;
+            if (g.Family == 3)
+                return 12f;
+            if (g.Family == 4)
+                return 8f;
+            if (g.Family == 6)
+                return 18f;
+            if (g.Family == 7)
+                return g.Body == "q_AK47.obj" || g.Body == "ak_body.obj" ? 22f : 18f;
+            if (g.Family == 8)
+                return 26f;
+            if (g.Family == 10)
+                return 32f;
+            if (g.Kind == "HEAT")
+                return 58f;
+            if (g.Kind == "HE")
+                return 40f;
+            return 16f;
+        }
+
+        internal static float PierceHp(GaGun g)
+        {
+            if (g == null)
+                return 4f;
+            if (g.Body == "at4.obj")
+                return 95f;
+            if (g.Body == "q_RPG7.obj")
+                return 75f;
+            if (g.Body == "rbs70.obj")
+                return 55f;
+            if (g.Body == "g11.obj")
+                return 7.5f;
+            if (g.Family == 0)
+                return 4f;
+            if (g.Family == 1)
+                return 3f;
+            if (g.Family == 3)
+                return 4f;
+            if (g.Family == 4)
+                return 3.5f;
+            if (g.Family == 7 && (g.Body == "q_AK47.obj" || g.Body == "ak_body.obj"))
+                return 5.5f;
+            if (g.Family == 8)
+                return 7f;
+            if (g.Family == 10)
+                return 9f;
+            if (g.Kind == "HEAT")
+                return 75f;
+            if (g.Kind == "HE")
+                return 55f;
+            return 4.5f;
+        }
+
+        internal static float BlastHp(GaGun g)
+        {
+            if (g == null)
+                return 0f;
+            if (g.Body == "at4.obj")
+                return 140f;
+            if (g.Body == "q_RPG7.obj")
+                return 110f;
+            if (g.Body == "rbs70.obj")
+                return 40f;
+            if (g.Kind == "HEAT")
+                return 110f;
+            if (g.Kind == "HE")
+                return 40f;
+            return 0f;
+        }
+
+        private static void ScaleVsTarget(ref float pierce, ref float blast, ref float impact, GaGun g, Transform hitXf)
+        {
+            if (hitXf == null)
+                return;
+            bool air = false;
+            bool building = false;
+            bool vehicle = false;
+            try
+            {
+                if (hitXf.GetComponentInParent<GaPawn>() != null
+                    || hitXf.GetComponentInParent<PilotDismounted>() != null)
+                    return;
+                else if (hitXf.GetComponentInParent<Aircraft>() != null)
+                    air = true;
+                else if (hitXf.GetComponentInParent<Building>() != null
+                    || hitXf.GetComponentInParent<MapBuilding>() != null)
+                    building = true;
+                else if (hitXf.GetComponentInParent<GroundVehicle>() != null
+                    || hitXf.GetComponentInParent<Ship>() != null)
+                    vehicle = true;
+            }
+            catch { }
+            float mul = 1f;
+            if (IsPureKe(g))
+            {
+                if (vehicle)
+                    mul = 0.03f;
+                else if (air)
+                    mul = 0.015f;
+            }
+            else if (g != null && g.Kind == "HE")
+            {
+                if (building)
+                    mul = 0.22f;
+                else if (vehicle)
+                    mul = 0.35f;
+                else if (air)
+                    mul = 0.8f;
+            }
+            else
+            {
+                if (building)
+                    mul = 0.38f;
+                else if (vehicle)
+                    mul = 0.62f;
+                else if (air)
+                    mul = 0.4f;
+            }
+            pierce *= mul;
+            blast *= mul;
+            impact *= mul;
+        }
+
+        private static void HurtHit(RaycastHit hit, GaGun g, Vector3 incoming)
         {
             if (g == null || hit.collider == null)
                 return;
-            float pierce = g.Pen;
-            float blast = g.Fire == 4 ? g.Damage * 0.4f : 0f;
-            float impact = g.Damage;
+            Transform pawn = GaMode.PawnRoot;
+            Transform t = hit.collider.transform;
+            if (pawn != null && (t == pawn || t.IsChildOf(pawn)))
+                return;
+            float pierce = PierceHp(g);
+            float blast = BlastHp(g);
+            float impact = Kinetic(g);
+            Transform xf = null;
+            try { xf = hit.collider.transform; }
+            catch { }
+            ScaleVsTarget(ref pierce, ref blast, ref impact, g, xf);
+            GaVehicleArmor.RememberInfantryShot(PenGrade(g), incoming, IsPureKe(g));
             PersistentID dealer = PersistentID.None;
             try
             {
@@ -304,182 +535,105 @@ namespace GroundArsenal
                     try { dmg.ApplyDamage(pierce, blast, 0f, impact); }
                     catch { }
                 }
+                return;
             }
+            Unit u = null;
+            try { u = hit.collider.GetComponentInParent<Unit>(); }
+            catch { }
+            if (u == null)
+                return;
+            UnitPart[] parts = null;
+            try { parts = u.GetComponentsInChildren<UnitPart>(); }
+            catch { }
+            if (parts != null && parts.Length > 0 && parts[0] != null)
+            {
+                try { parts[0].TakeDamage(pierce, blast, 1f, 0f, impact, dealer); }
+                catch { }
+            }
+        }
+
+        private static bool WeaponRay(Vector3 origin, Vector3 dir, float range, out RaycastHit hit)
+        {
+            hit = default(RaycastHit);
+            if (range < 0.05f)
+                return false;
+            RaycastHit[] all = Physics.RaycastAll(origin, dir, range,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            return PickHit(all, out hit);
+        }
+
+        private static bool WeaponLine(Vector3 a, Vector3 b, out RaycastHit hit)
+        {
+            hit = default(RaycastHit);
+            Vector3 d = b - a;
+            float range = d.magnitude;
+            if (range < 0.01f)
+                return false;
+            RaycastHit[] all = Physics.RaycastAll(a, d / range, range,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            return PickHit(all, out hit);
+        }
+
+        private static bool PickHit(RaycastHit[] all, out RaycastHit hit)
+        {
+            hit = default(RaycastHit);
+            if (all == null || all.Length == 0)
+                return false;
+            Transform pawn = GaMode.PawnRoot;
+            float best = float.MaxValue;
+            bool ok = false;
+            for (int i = 0; i < all.Length; i++)
+            {
+                Collider col = all[i].collider;
+                if (col == null)
+                    continue;
+                Transform t = col.transform;
+                if (pawn != null && (t == pawn || t.IsChildOf(pawn)))
+                    continue;
+                if (all[i].distance < 1.15f)
+                {
+                    Unit near = null;
+                    try { near = col.GetComponentInParent<Unit>(); }
+                    catch { }
+                    IDamageable dmg = null;
+                    try { dmg = col.GetComponentInParent<IDamageable>(); }
+                    catch { }
+                    if (near == null && dmg == null)
+                        continue;
+                }
+                if (all[i].distance < best)
+                {
+                    best = all[i].distance;
+                    hit = all[i];
+                    ok = true;
+                }
+            }
+            return ok;
         }
 
         internal static void ClearBolts()
         {
+            for (int i = 0; i < Bolts.Count; i++)
+            {
+                if (Bolts[i].Go != null)
+                    UnityEngine.Object.Destroy(Bolts[i].Go);
+            }
             Bolts.Clear();
         }
 
         internal static void AttachViews(Transform eye)
         {
-            DestroyViews();
-            if (eye == null)
-                return;
-            EnsureAssets();
-            _viewRoot = new GameObject("GaView");
-            _viewRoot.transform.SetParent(eye, false);
-            _viewRoot.transform.localPosition = Vector3.zero;
-            _viewRoot.transform.localRotation = Quaternion.identity;
-            _famGo = new GameObject[GaCatalog.FamilyCount];
-            Vector3[] pos = new Vector3[]
-            {
-                new Vector3(0.16f, -0.13f, 0.28f),
-                new Vector3(0.16f, -0.13f, 0.30f),
-                new Vector3(0.16f, -0.14f, 0.30f),
-                new Vector3(0.18f, -0.15f, 0.32f),
-                new Vector3(0.20f, -0.17f, 0.36f),
-                new Vector3(0.20f, -0.17f, 0.36f),
-                new Vector3(0.20f, -0.16f, 0.34f),
-                new Vector3(0.20f, -0.16f, 0.34f),
-                new Vector3(0.20f, -0.16f, 0.36f),
-                new Vector3(0.20f, -0.17f, 0.38f),
-                new Vector3(0.20f, -0.17f, 0.40f),
-                new Vector3(0.18f, -0.18f, 0.36f),
-                new Vector3(0.16f, -0.18f, 0.36f),
-                new Vector3(0.16f, -0.22f, 0.40f),
-                new Vector3(0.12f, -0.22f, 0.36f),
-                new Vector3(0.18f, -0.15f, 0.32f)
-            };
-            float[] len = new float[]
-            {
-                0.28f, 0.32f, 0.34f, 0.42f, 0.50f, 0.50f, 0.48f, 0.52f,
-                0.54f, 0.56f, 0.58f, 0.55f, 0.46f, 0.62f, 0.55f, 0.50f
-            };
-            for (int i = 0; i < GaCatalog.FamilyCount; i++)
-            {
-                Material mat = _famMat != null && i < _famMat.Length && _famMat[i] != null
-                    ? _famMat[i] : _unlitCol;
-                _famGo[i] = MakeView("Fam" + i, MeshAt(i), mat, pos[i], len[i]);
-                _famGo[i].SetActive(false);
-            }
-            ShowFam(Current);
+            GaView.Attach(eye);
         }
 
         internal static void DestroyViews()
         {
-            if (_viewRoot != null)
-                UnityEngine.Object.Destroy(_viewRoot);
-            _viewRoot = null;
-            _famGo = null;
+            GaView.Destroy();
         }
 
-        private static void ShowFam(GaGun g)
+        internal static void RefreshView()
         {
-            if (_famGo == null)
-                return;
-            int fam = g != null ? g.Family : 0;
-            for (int i = 0; i < _famGo.Length; i++)
-            {
-                if (_famGo[i] != null)
-                    _famGo[i].SetActive(i == fam);
-            }
-            if (g != null && _famGo[fam] != null)
-            {
-                Renderer r = _famGo[fam].GetComponent<Renderer>();
-                if (r != null && r.material != null)
-                    r.material.color = Color.Lerp(Color.white, g.Tint, 0.35f);
-            }
-        }
-
-        private static GameObject MakeView(string name, Mesh mesh, Material mat, Vector3 local, float wantLen)
-        {
-            GameObject go;
-            if (mesh != null)
-            {
-                go = new GameObject(name);
-                MeshFilter mf = go.AddComponent<MeshFilter>();
-                mf.sharedMesh = mesh;
-                MeshRenderer mr = go.AddComponent<MeshRenderer>();
-                mr.sharedMaterial = mat;
-                mr.shadowCastingMode = ShadowCastingMode.Off;
-                mr.receiveShadows = false;
-                float sc = Fit(mesh, wantLen);
-                go.transform.localScale = Vector3.one * sc;
-            }
-            else
-            {
-                go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                go.name = name;
-                Collider c = go.GetComponent<Collider>();
-                if (c != null)
-                    UnityEngine.Object.Destroy(c);
-                go.transform.localScale = new Vector3(0.05f, 0.05f, wantLen);
-                Renderer r = go.GetComponent<Renderer>();
-                if (r != null)
-                {
-                    r.sharedMaterial = mat;
-                    r.shadowCastingMode = ShadowCastingMode.Off;
-                }
-            }
-            go.transform.SetParent(_viewRoot.transform, false);
-            go.transform.localPosition = local;
-            go.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
-            return go;
-        }
-
-        private static float Fit(Mesh mesh, float wantLen)
-        {
-            if (mesh == null || wantLen < 0.05f)
-                return 1f;
-            Vector3 sz = mesh.bounds.size;
-            float longest = Mathf.Max(sz.x, Mathf.Max(sz.y, sz.z));
-            if (longest < 0.01f)
-                return 1f;
-            return wantLen / longest;
-        }
-
-        private static Mesh MeshAt(int i)
-        {
-            if (_famMesh == null || i < 0 || i >= _famMesh.Length)
-                return null;
-            return _famMesh[i];
-        }
-
-        private static void EnsureAssets()
-        {
-            if (_tried)
-                return;
-            _tried = true;
-            Shader sh = Shader.Find("Unlit/Texture");
-            if (sh == null)
-                sh = Shader.Find("Unlit/Color");
-            if (sh == null)
-                sh = Shader.Find("Standard");
-            _unlitTex = new Material(sh);
-            Shader col = Shader.Find("Unlit/Color");
-            if (col == null)
-                col = sh;
-            _unlitCol = new Material(col);
-            _unlitCol.color = new Color(0.18f, 0.18f, 0.19f);
-            _famMesh = new Mesh[GaCatalog.FamilyCount];
-            _famTex = new Texture2D[GaCatalog.FamilyCount];
-            _famMat = new Material[GaCatalog.FamilyCount];
-            string dir = GaObj.ResolveDir();
-            int nMesh = 0;
-            int nTex = 0;
-            for (int i = 0; i < GaCatalog.FamilyCount; i++)
-            {
-                string stem = "fam_" + i.ToString("00");
-                if (!string.IsNullOrEmpty(dir))
-                {
-                    _famMesh[i] = GaObj.Load(Path.Combine(dir, stem + ".obj"));
-                    _famTex[i] = GaObj.LoadPng(Path.Combine(dir, stem + ".png"));
-                }
-                if (_famMesh[i] != null)
-                    nMesh++;
-                if (_famTex[i] != null)
-                {
-                    nTex++;
-                    _famMat[i] = new Material(_unlitTex);
-                    _famMat[i].mainTexture = _famTex[i];
-                    _famMat[i].color = Color.white;
-                }
-            }
-            if (GaPlugin.Log != null)
-                GaPlugin.Log.LogInfo("GroundArsenal meshes " + nMesh + "/" + GaCatalog.FamilyCount
-                    + " tex " + nTex);
+            GaView.Refresh();
         }
     }
 }

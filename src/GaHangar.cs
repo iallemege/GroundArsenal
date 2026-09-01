@@ -13,64 +13,110 @@ namespace GroundArsenal
         private static readonly FieldInfo GameplaySelMenu =
             AccessTools.Field(typeof(GameplayUI), "aircraftSelectionMenu");
 
-        private static Rect _win = new Rect(18f, 110f, 420f, 280f);
+        private static Rect _win = new Rect(18f, 80f, 560f, 720f);
         private static GUIStyle _body;
         private static GUIStyle _btn;
         private static GUIStyle _btnOn;
         private static bool _styles;
         private static Vector2 _scroll;
+        private static int _pickSlot;
 
         internal static void Draw()
         {
             if (GaMode.Active)
                 return;
-            if (!SelectionOpen())
-                return;
             Ensure();
-            _win = GUI.Window(0x47414847, _win, DrawWindow,
-                GaMode.Zh ? "Ground Arsenal 步兵" : "Ground Arsenal infantry");
-        }
-
-        private static bool SelectionOpen()
-        {
-            AircraftSelectionMenu menu = UnityEngine.Object.FindObjectOfType<AircraftSelectionMenu>();
-            if (menu == null)
-                return false;
-            try
-            {
-                if (!menu.gameObject.activeInHierarchy)
-                    return false;
-            }
-            catch { return false; }
-            return true;
+            if (_win.width < 560f)
+                _win.width = 560f;
+            if (_win.height < 720f)
+                _win.height = 720f;
+            _win = GUI.Window(0x47414847, _win, DrawWindow, "Ground Arsenal infantry");
+            if (GaHud.CatalogOpen)
+                ArmorCatalogService.Draw();
         }
 
         private static void DrawWindow(int id)
         {
-            GUILayout.Label(GaMode.Zh
-                ? "部署带 9 把热键枪。机上 hop-out（U）只带随身（槽 1）。G 在战场打开 300 武库。"
-                : "Deploy with 9 hotbar guns. Aircraft hop-out (U) carries slot 1 only. G opens the 300-gun arsenal in the field.",
-                _body);
+            GaIcons.Ensure();
             GaCombat.LoadPrefs();
-            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(140f));
-            for (int i = 0; i < GaCombat.Hotbar.Length; i++)
+            GUILayout.Label(
+                GaCatalog.Count.ToString()
+                    + " modeled guns (standalone — no Oritasy required). Downloaded CC0 bodies: 46 + 3 original (AT-4, RBS 70, G11). Deploy costs the unique guns on the hotbar (pistol 0.12M … RBS 70 2.80M). Hits spark; tracers optional. Slot 1 is carry-on. Quote (') = AP table.",
+                _body);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Hotbar slot:", _body, GUILayout.Width(90f));
+            for (int s = 0; s < GaCombat.Hotbar.Length; s++)
             {
-                GaGun g = GaCatalog.Get(GaCombat.Hotbar[i]);
-                string row = (i + 1).ToString() + "  " + GaCatalog.Name(g, GaMode.Zh)
-                    + "  PEN " + Mathf.RoundToInt(g.Pen).ToString();
-                GUILayout.Label(row, i == 0 ? _btnOn : _body);
+                string lab = (s + 1).ToString();
+                if (s == 0)
+                    lab = "1 CARRY";
+                if (GUILayout.Button(lab, s == _pickSlot ? _btnOn : _btn, GUILayout.Height(22f)))
+                    _pickSlot = s;
+            }
+            GUILayout.EndHorizontal();
+            GaGun cur = GaCatalog.Get(GaCombat.Hotbar[_pickSlot]);
+            GUILayout.Label("Slot " + (_pickSlot + 1).ToString() + ": " + GaCatalog.Name(cur, false)
+                + "  PEN " + Mathf.RoundToInt(cur.Pen).ToString()
+                + "  " + GaCatalog.CostM(cur).ToString("0.00") + "M", _body);
+            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(460f));
+            for (int i = 0; i < GaCatalog.Count; i++)
+            {
+                GaGun g = GaCatalog.All[i];
+                bool on = false;
+                for (int h = 0; h < GaCombat.Hotbar.Length; h++)
+                {
+                    if (GaCombat.Hotbar[h] == g.Id)
+                        on = true;
+                }
+                Rect row = GUILayoutUtility.GetRect(1f, 52f, GUILayout.ExpandWidth(true));
+                Texture2D ic = GaIcons.Get(g);
+                if (ic != null)
+                    GUI.DrawTexture(new Rect(row.x, row.y + 2f, 96f, 48f), ic, ScaleMode.ScaleToFit);
+                string tag = "";
+                if (GaCombat.Hotbar[0] == g.Id)
+                    tag = "  [CARRY]";
+                else if (on)
+                    tag = "  [HOTBAR]";
+                string label = g.En + "  " + g.Kind + "  PEN " + Mathf.RoundToInt(g.Pen).ToString()
+                    + "  " + GaCatalog.CostM(g).ToString("0.00") + "M" + tag;
+                if (GUI.Button(new Rect(row.x + 100f, row.y, row.width - 100f, 50f), label, on ? _btnOn : _btn))
+                {
+                    GaCombat.Hotbar[_pickSlot] = g.Id;
+                    GaCombat.Mag[g.Id] = g.Mag;
+                    GaCombat.Reserve[g.Id] = g.Reserve;
+                    GaCombat.SavePrefs();
+                }
             }
             GUILayout.EndScrollView();
-            if (GUILayout.Button(GaMode.Zh ? "部署步兵（300 武库 / 9 热键）" : "DEPLOY INFANTRY (300 arsenal / 9 hotbar)",
-                GUILayout.Height(36f)))
+            float kitCost = GaCombat.KitCostM();
+            float funds = GaFunds.Read();
+            string dep = "DEPLOY  " + kitCost.ToString("0.00") + "M   funds " + funds.ToString("0.0") + "M";
+            if (funds + 0.001f < kitCost)
+                dep = "NEED " + kitCost.ToString("0.00") + "M  (have " + funds.ToString("0.0") + "M)";
+            if (GUILayout.Button(dep, GUILayout.Height(36f)))
             {
                 GaCombat.SavePrefs();
-                GaMode.HangarQueued = true;
+                if (!GaConfig.IsEnabled())
+                    GaMode.Deny("Turn infantry ON first.", "Turn infantry ON first.");
+                else
+                    GaMode.HangarQueued = true;
             }
-            GUILayout.Label(GaMode.Zh
-                ? "进场后按 G 从 300 种里换热键。左轮到火箭筒、科幻枪都在。"
-                : "Press G in the field to swap any of 300 guns onto the hotbar.",
-                _body);
+            if (GUILayout.Button(GaConfig.IsEnabled() ? "Infantry ENABLED  (click to disable)" : "Infantry DISABLED  (click to enable)",
+                GUILayout.Height(24f)))
+                GaConfig.SetEnabled(!GaConfig.IsEnabled());
+            if (GUILayout.Button("Armor table", GUILayout.Height(24f)))
+            {
+                ArmorCatalogService.EnsureScanned();
+                GaHud.CatalogOpen = true;
+            }
+            if (GaConfig.WantPerf())
+            {
+                float fps = Time.unscaledDeltaTime > 0.0001f ? (1f / Time.unscaledDeltaTime) : 0f;
+                GUILayout.Label("Standalone " + GaInfo.Version + "   "
+                    + Mathf.RoundToInt(fps).ToString() + " fps   sparks "
+                    + GaFx.Live.ToString()
+                    + (GaOritasy.HasModularArmor ? "   Oritasy AP present" : "   GA AP"), _body);
+            }
             GUI.DragWindow(new Rect(0f, 0f, 10000f, 22f));
         }
 

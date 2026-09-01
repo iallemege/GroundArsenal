@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using HarmonyLib;
+using UnityEngine;
 
 namespace GroundArsenal
 {
@@ -15,11 +16,18 @@ namespace GroundArsenal
         private static bool _claimed;
 
         private static bool _patched;
+        internal static bool HasModularArmor;
+
+        internal static void Detect()
+        {
+            HasModularArmor = FindType("Oritasy.ModularArmorService") != null;
+        }
 
         internal static void Claim()
         {
             _mode = FindType("Oritasy.InfantryModeService");
             _hangar = FindType("Oritasy.InfantryHangarMenu");
+            Detect();
             if (_mode == null)
                 return;
             try
@@ -76,6 +84,24 @@ namespace GroundArsenal
         private static bool Skip()
         {
             return false;
+        }
+
+        internal static void RememberShot(int penGrade, Vector3 incoming, bool pureKe)
+        {
+            Type t = FindType("Oritasy.ModularArmorService");
+            if (t == null)
+                return;
+            try
+            {
+                MethodInfo m = t.GetMethod("RememberInfantryShot",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new Type[] { typeof(int), typeof(Vector3), typeof(bool) },
+                    null);
+                if (m != null)
+                    m.Invoke(null, new object[] { penGrade, incoming, pureKe });
+            }
+            catch { }
         }
 
         private static Type FindType(string fullName)

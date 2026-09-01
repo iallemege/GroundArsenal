@@ -95,6 +95,40 @@ namespace GroundArsenal
             if (!anyNrm)
                 mesh.RecalculateNormals();
             mesh.RecalculateBounds();
+            Vector3 c = mesh.bounds.center;
+            if (c.sqrMagnitude > 0.0001f)
+            {
+                Vector3[] verts = mesh.vertices;
+                for (int i = 0; i < verts.Length; i++)
+                    verts[i] -= c;
+                mesh.vertices = verts;
+                mesh.RecalculateBounds();
+                if (!anyNrm)
+                    mesh.RecalculateNormals();
+            }
+            if (!anyUv)
+            {
+                Vector3[] verts = mesh.vertices;
+                Vector2[] uv = new Vector2[verts.Length];
+                Vector3 sz = mesh.bounds.size;
+                float sx = sz.x > 0.0001f ? sz.x : 1f;
+                float sy = sz.y > 0.0001f ? sz.y : 1f;
+                float szz = sz.z > 0.0001f ? sz.z : 1f;
+                for (int i = 0; i < verts.Length; i++)
+                {
+                    Vector3 v = verts[i];
+                    float ax = Mathf.Abs(v.x) / sx;
+                    float ay = Mathf.Abs(v.y) / sy;
+                    float az = Mathf.Abs(v.z) / szz;
+                    if (ax >= ay && ax >= az)
+                        uv[i] = new Vector2(v.z / szz + 0.5f, v.y / sy + 0.5f);
+                    else if (ay >= az)
+                        uv[i] = new Vector2(v.x / sx + 0.5f, v.z / szz + 0.5f);
+                    else
+                        uv[i] = new Vector2(v.x / sx + 0.5f, v.y / sy + 0.5f);
+                }
+                mesh.uv = uv;
+            }
             try { mesh.RecalculateTangents(); }
             catch { }
             return mesh;
@@ -150,7 +184,12 @@ namespace GroundArsenal
 
         private static bool DirOk(string dir)
         {
-            return !string.IsNullOrEmpty(dir) && Directory.Exists(dir);
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                return false;
+            return File.Exists(Path.Combine(dir, "kits.txt"))
+                || File.Exists(Path.Combine(dir, "pistol_body.obj"))
+                || File.Exists(Path.Combine(dir, "q_Pistol_1.obj"))
+                || File.Exists(Path.Combine(dir, "fam_00.obj"));
         }
 
         private static int AddVertex(

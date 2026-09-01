@@ -84,4 +84,15 @@ namespace GroundArsenal
             GaMode.ApplyCamera(__instance);
         }
     }
+
+    [HarmonyPatch(typeof(DamageEffects), "ArmorPenetrate")]
+    internal static class GaPatch_ArmorPenetrate
+    {
+        [HarmonyPostfix]
+        private static void Postfix(Vector3 position, Vector3 velocity, float muzzleVelocity,
+            float pierceDamage, float blastDamage, PersistentID dealerID)
+        {
+            GaMode.TryAbsorbWorldHit(position, velocity, pierceDamage, blastDamage, dealerID);
+        }
+    }
 }

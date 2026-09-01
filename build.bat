@@ -34,6 +34,7 @@ if not exist "%MANAGED%\Assembly-CSharp.dll" (
   /r:"%MANAGED%\UnityEngine.TextRenderingModule.dll" ^
   /r:"%MANAGED%\UnityEngine.InputLegacyModule.dll" ^
   /r:"%MANAGED%\UnityEngine.ImageConversionModule.dll" ^
+  /r:"%MANAGED%\UnityEngine.ParticleSystemModule.dll" ^
   "%ROOT%src\GaPlugin.cs" ^
   "%ROOT%src\GaCatalog.cs" ^
   "%ROOT%src\GaMode.cs" ^
@@ -43,7 +44,16 @@ if not exist "%MANAGED%\Assembly-CSharp.dll" (
   "%ROOT%src\GaHarmony.cs" ^
   "%ROOT%src\GaObj.cs" ^
   "%ROOT%src\GaFx.cs" ^
-  "%ROOT%src\GaOritasy.cs"
+  "%ROOT%src\GaOritasy.cs" ^
+  "%ROOT%src\GaKit.cs" ^
+  "%ROOT%src\GaView.cs" ^
+  "%ROOT%src\GaPawn.cs" ^
+  "%ROOT%src\GaArmorMath.cs" ^
+  "%ROOT%src\GaArmorCatalog.cs" ^
+  "%ROOT%src\GaIcons.cs" ^
+  "%ROOT%src\GaVehicleArmor.cs" ^
+  "%ROOT%src\GaConfig.cs" ^
+  "%ROOT%src\GaFunds.cs"
 
 if errorlevel 1 (
   echo GROUND ARSENAL BUILD FAILED

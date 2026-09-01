@@ -10,7 +10,7 @@ namespace GroundArsenal
     {
         internal const string GUID = "com.iallemege.groundarsenal";
         internal const string Name = "Ground Arsenal";
-        internal const string Version = "1.0.0";
+        internal const string Version = "1.1.0";
     }
 
     [BepInPlugin(GaInfo.GUID, GaInfo.Name, GaInfo.Version)]
@@ -25,20 +25,30 @@ namespace GroundArsenal
         {
             Instance = this;
             Log = Logger;
+            GaConfig.Bind(Config);
             _harmony = new Harmony(GaInfo.GUID);
             _harmony.PatchAll();
-            GaOritasy.Claim();
-            GaOritasy.PatchTicks(_harmony);
+            GaOritasy.Detect();
+            if (GaConfig.WantPauseOritasy())
+            {
+                GaOritasy.Claim();
+                GaOritasy.PatchTicks(_harmony);
+            }
             try { SceneManager.sceneLoaded += OnScene; }
             catch { }
             Logger.LogInfo(GaInfo.Name + " " + GaInfo.Version
-                + " — 300 guns, no Oritasy compile reference");
+                + " — standalone infantry "
+                + (GaConfig.IsEnabled() ? "ON" : "OFF")
+                + ", " + GaCatalog.Count + " modeled guns");
         }
 
         private void Start()
         {
-            GaOritasy.Claim();
-            GaOritasy.PatchTicks(_harmony);
+            if (GaConfig.WantPauseOritasy())
+            {
+                GaOritasy.Claim();
+                GaOritasy.PatchTicks(_harmony);
+            }
         }
 
         private void Update()
@@ -48,9 +58,17 @@ namespace GroundArsenal
 
         private void OnGUI()
         {
-            if (GaMode.IsMenuScene())
-                return;
-            GaMode.Draw();
+            try
+            {
+                if (GaMode.IsMenuScene())
+                    return;
+                GaMode.Draw();
+            }
+            catch (Exception ex)
+            {
+                if (Log != null)
+                    Log.LogWarning("GroundArsenal OnGUI: " + ex.Message);
+            }
         }
 
         private void OnDestroy()

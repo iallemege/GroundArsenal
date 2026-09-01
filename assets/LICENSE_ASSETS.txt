@@ -1,9 +1,21 @@
-Ground Arsenal weapon families:
+Ground Arsenal weapon meshes (all free / CC0, no paid stores):
 
-- fam_00..06, fam_09..11: Quaternius Ultimate Guns Pack (CC0 / public domain)
+Honest count: 46 downloaded unique gun bodies + 3 original infantry meshes = 49 selectable guns.
+
+loafbrr (OpenGameArt) — 3 bodies: pistol / AK / revolver with separate magazine, slide, bolt, cylinder.
+  https://opengameart.org/content/pistol-5
+  https://opengameart.org/content/ak
+  https://opengameart.org/content/revolver-game-asset
+  Albedo PNGs included. Reload animates those parts.
+
+Quaternius Ultimate Guns Pack — 43 unique CC0 gun bodies (plus accessories: silencer, scope, grip).
   https://opengameart.org/content/low-poly-guns-pack
-- fam_07 (M16), fam_08 (AK-47), fam_13 (RPG-7): OpenGameArt byzmod3d CC0
-- fam_12, fam_14, fam_15, AT-4 analogue: original low-poly
-- Albedo PNGs: original generated maps
+
+Original (copied from Oritasy infantry, not a download): AT-4, RBS 70, G11.
+
+Accessories (acc_*) and family placeholders (fam_00–fam_15) are not separate selectable guns.
+
+There is no public CC0 library of 300 unique high-poly firearms with baked rigs.
+Paid Asset Store / CGTrader packs are not used.
 
 Do not include paid CGTrader / Unity Asset Store meshes.
