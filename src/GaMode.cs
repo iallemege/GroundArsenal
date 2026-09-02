@@ -1,4 +1,6 @@
 using System;
+using System.Reflection;
+using HarmonyLib;
 using NuclearOption.Networking;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -48,10 +50,19 @@ namespace GroundArsenal
         private static bool _chuteArmed;
         private static float _chuteReadyAt;
         private static PilotDismounted _chuteDummy;
+        private static int _chuteSeenId;
         internal const float SprintDur = 60f;
         internal const float SprintCd = 3f;
         internal const float JumpCd = 3f;
         internal const float JumpHeight = 8f;
+        private static readonly FieldInfo StatusDisplayField =
+            AccessTools.Field(typeof(Aircraft), "statusDisplay");
+
+        internal static Aircraft ParkedAircraft
+        {
+            get { return _parked; }
+        }
+
         internal static Transform PawnRoot
         {
             get { return _pawn != null ? _pawn.transform : null; }
@@ -70,6 +81,28 @@ namespace GroundArsenal
         internal static float LookYaw
         {
             get { return _yaw; }
+        }
+
+        internal static void PullLook(Vector3 worldFwd, float t)
+        {
+            if (_eye == null || t <= 0.0001f)
+                return;
+            if (worldFwd.sqrMagnitude < 0.0001f)
+                return;
+            worldFwd.Normalize();
+            Vector3 next = Vector3.Slerp(_eye.forward, worldFwd, Mathf.Clamp01(t));
+            if (next.sqrMagnitude < 0.0001f)
+                return;
+            next.Normalize();
+            Vector3 flat = new Vector3(next.x, 0f, next.z);
+            if (flat.sqrMagnitude > 0.0001f)
+                _yaw = Mathf.Atan2(flat.x, flat.z) * Mathf.Rad2Deg;
+            _pitch = -Mathf.Asin(Mathf.Clamp(next.y, -1f, 1f)) * Mathf.Rad2Deg;
+            if (_pitch < -85f) _pitch = -85f;
+            if (_pitch > 85f) _pitch = 85f;
+            if (_pawn != null)
+                _pawn.transform.rotation = Quaternion.Euler(0f, _yaw, 0f);
+            _eye.localRotation = Quaternion.Euler(_pitch, 0f, 0f);
         }
 
         internal static bool SprintActive
@@ -111,6 +144,15 @@ namespace GroundArsenal
             if (!Active)
             {
                 TickChuteLanding();
+                if (!GaHangar.HangarSelectOpen())
+                {
+                    if (GaHud.CatalogOpen)
+                        GaHud.CloseMenus();
+                    if (Input.GetKeyDown(KeyCode.U))
+                        TryHopOut();
+                    return;
+                }
+                GaHangar.TickKeys();
                 if (Input.GetKeyDown(KeyCode.Quote))
                 {
                     GaHud.CatalogOpen = !GaHud.CatalogOpen;
@@ -125,22 +167,26 @@ namespace GroundArsenal
             }
             HoldFlightControls();
             FreezeAircraft();
+            HideAircraftHud();
+            KickCockpitCam();
+            if (_chuteDummy != null)
+                NeutralizeDummy(_chuteDummy);
             TickArmorFatigue();
             if (Dead)
             {
-                if (Time.unscaledTime >= _deadUntil
-                    || Input.GetKeyDown(KeyCode.Space)
-                    || Input.GetKeyDown(KeyCode.Escape))
-                    Exit(false);
+                if (Time.unscaledTime >= _deadUntil)
+                    FinishDeath();
                 return;
             }
             GaHud.Tick();
+            GaRadar.Tick(Time.deltaTime);
             if (!GaHud.BlocksLook)
             {
                 LookMove();
                 if (_eye != null)
                     GaCombat.Tick(_eye, Time.deltaTime);
             }
+            GaLoot.Tick(_pawn != null ? _pawn.transform.position : EyePos);
             if (Input.GetKeyDown(KeyCode.U))
                 TryBoard();
         }
@@ -224,6 +270,125 @@ namespace GroundArsenal
             catch { }
         }
 
+        internal static void ClaimParked(Aircraft ac)
+        {
+            if (ac == null)
+                return;
+            bool fresh = _parked != ac;
+            _parked = ac;
+            if (fresh)
+                Deny("Aircraft marked. Walk up, U to board.",
+                    "Aircraft marked. Walk up, U to board.");
+        }
+
+        internal static void OnPlayerSetAircraft(Player p, Aircraft ac)
+        {
+            if (!Active || p == null || ac == null)
+                return;
+            bool local = false;
+            try { local = p.IsLocalPlayer; }
+            catch { local = false; }
+            if (!local)
+                return;
+            ClaimParked(ac);
+            try { p.RemoveAircraft(ac); }
+            catch { }
+            HideAircraftHud();
+            KickCockpitCam();
+        }
+
+        internal static void OnLocalAircraftUi(Aircraft ac)
+        {
+            if (!Active || ac == null)
+                return;
+            ClaimParked(ac);
+            Player p = null;
+            try { GameManager.GetLocalPlayer(out p); }
+            catch { }
+            if (p != null)
+            {
+                try { p.RemoveAircraft(ac); }
+                catch { }
+            }
+            HideAircraftHud();
+            KickCockpitCam();
+        }
+
+        internal static bool BlockCockpitSwitch(CameraStateManager mgr, CameraBaseState state)
+        {
+            if (!Active || mgr == null || state == null)
+                return false;
+            return state == mgr.cockpitState || state == mgr.chaseState;
+        }
+
+        internal static void HideAircraftHud()
+        {
+            try { FlightHud.EnableCanvas(false); }
+            catch { }
+            try
+            {
+                CombatHUD hud = SceneSingleton<CombatHUD>.i;
+                if (hud != null && hud.aircraft != null)
+                    hud.RemoveAircraft();
+            }
+            catch { }
+            SetStatusVisible(_parked, false);
+        }
+
+        internal static void KickCockpitCam()
+        {
+            try
+            {
+                CameraStateManager mgr = SceneSingleton<CameraStateManager>.i;
+                if (mgr == null || mgr.currentState == null)
+                    return;
+                CameraBaseState cur = mgr.currentState;
+                if (cur == mgr.cockpitState || cur == mgr.chaseState || cur == mgr.orbitState)
+                    mgr.SwitchState(mgr.freeState);
+            }
+            catch { }
+            try { CameraStateManager.cameraMode = CameraMode.free; }
+            catch { }
+            try { CameraStateManager.enableMouseLook = false; }
+            catch { }
+        }
+
+        internal static void ShowAircraftHud(Aircraft ac)
+        {
+            if (ac == null)
+                return;
+            SetStatusVisible(ac, true);
+            try
+            {
+                FlightHud hud = SceneSingleton<FlightHud>.i;
+                if (hud != null)
+                    hud.SetAircraft(ac);
+            }
+            catch { }
+            try
+            {
+                CombatHUD ch = SceneSingleton<CombatHUD>.i;
+                if (ch != null && ch.aircraft != ac)
+                    ch.SetAircraft(ac);
+            }
+            catch { }
+            try { FlightHud.EnableCanvas(true); }
+            catch { }
+        }
+
+        private static void SetStatusVisible(Aircraft ac, bool on)
+        {
+            if (ac == null || StatusDisplayField == null)
+                return;
+            try
+            {
+                StatusDisplay sd = StatusDisplayField.GetValue(ac) as StatusDisplay;
+                if (sd != null && sd.gameObject != null)
+                    sd.gameObject.SetActive(on);
+            }
+            catch { }
+        }
+
         internal static void SilenceAircraft(Aircraft ac, bool park)
         {
             if (ac == null)
@@ -267,9 +432,8 @@ namespace GroundArsenal
                 Hp = 0f;
             if (Hp <= 0f)
             {
-                Dead = true;
-                _deadUntil = Time.unscaledTime + 6f;
-                Deny("KIA — Space / Esc to leave.", "KIA — Space / Esc to leave.");
+                Hp = 0f;
+                Die();
             }
         }
 
@@ -426,6 +590,8 @@ namespace GroundArsenal
             GaCombat.AttachViews(_eye);
             HoldFlightControls();
             SilenceAircraft(ac, !AirHop);
+            HideAircraftHud();
+            KickCockpitCam();
         }
 
         private static void TryBoard()
@@ -451,6 +617,14 @@ namespace GroundArsenal
             {
                 if (p != null)
                     p.SetAircraft(ac);
+            }
+            catch { }
+            ShowAircraftHud(ac);
+            try
+            {
+                CameraStateManager mgr = SceneSingleton<CameraStateManager>.i;
+                if (mgr != null)
+                    mgr.SwitchState(mgr.cockpitState);
             }
             catch { }
             try { CameraStateManager.cameraMode = CameraMode.cockpit; }
@@ -513,6 +687,8 @@ namespace GroundArsenal
             catch { }
             try { CameraStateManager.enableMouseLook = false; }
             catch { }
+            HideAircraftHud();
+            KickCockpitCam();
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
         }
@@ -520,6 +696,7 @@ namespace GroundArsenal
         private static void Exit(bool toCockpit)
         {
             GaCombat.ClearBolts();
+            GaLoot.Clear();
             GaCombat.DestroyViews();
             RestoreCameraClip();
             if (_pawn != null)
@@ -531,6 +708,9 @@ namespace GroundArsenal
             Active = false;
             Dead = false;
             AirHop = false;
+            _chuteDummy = null;
+            _chuteArmed = false;
+            _chuteSeenId = 0;
             GaHud.CloseMenus();
             if (toCockpit)
             {
@@ -564,6 +744,78 @@ namespace GroundArsenal
             _haveSavedCam = false;
             _savedNear = -1f;
             _savedMask = -1;
+        }
+
+        private static void Die()
+        {
+            if (Dead)
+                return;
+            Dead = true;
+            Hp = 0f;
+            _deadUntil = Time.unscaledTime + 5f;
+            GaHud.CloseMenus();
+            if (_cc != null)
+                _cc.enabled = false;
+            GaCombat.ClearBolts();
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+        }
+
+        private static void FinishDeath()
+        {
+            Exit(false);
+            OpenSpawnMap();
+        }
+
+        private static void OpenSpawnMap()
+        {
+            Player p = null;
+            try { GameManager.GetLocalPlayer(out p); }
+            catch { p = null; }
+            try
+            {
+                CombatHUD hud = SceneSingleton<CombatHUD>.i;
+                if (hud != null && hud.aircraft != null)
+                    hud.RemoveAircraft();
+            }
+            catch { }
+            if (p != null)
+            {
+                try
+                {
+                    Aircraft owned = p.Aircraft;
+                    if (owned != null)
+                        p.RemoveAircraft(owned);
+                }
+                catch { }
+                try
+                {
+                    PilotDismounted pd = p.PilotDismounted;
+                    if (pd != null)
+                        p.RemovePilotDismounted(pd);
+                }
+                catch { }
+            }
+            try { DynamicMap.AllowedToOpen = true; }
+            catch { }
+            try
+            {
+                if (p != null)
+                    p.ShowMap(0f);
+                else
+                {
+                    DynamicMap map = SceneSingleton<DynamicMap>.i;
+                    if (map != null)
+                        map.Maximize();
+                }
+            }
+            catch { }
+            try
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+            catch { }
         }
 
         internal static Unit LinkedUnit()
@@ -703,13 +955,7 @@ namespace GroundArsenal
             if (Hp <= 0f)
             {
                 Hp = 0f;
-                Dead = true;
-                _deadUntil = Time.unscaledTime + 8f;
-                GaHud.FlashHit("KIA");
-                GaHud.CloseMenus();
-                if (_cc != null)
-                    _cc.enabled = false;
-                Deny("KIA — Space / Esc to leave.", "KIA — Space / Esc to leave.");
+                Die();
             }
         }
 
@@ -748,6 +994,7 @@ namespace GroundArsenal
                 if (!GameManager.GetLocalPilotDismounted(out pd) || pd == null)
                 {
                     _chuteArmed = false;
+                    _chuteSeenId = 0;
                     return;
                 }
             }
@@ -756,23 +1003,66 @@ namespace GroundArsenal
                 _chuteArmed = false;
                 return;
             }
+            int id = pd.GetInstanceID();
+            if (id != _chuteSeenId)
+            {
+                _chuteSeenId = id;
+                _chuteArmed = false;
+                _chuteReadyAt = 0f;
+            }
             PilotDismounted.PilotState st = pd.animationState;
             if (st == PilotDismounted.PilotState.dead)
             {
                 _chuteArmed = false;
                 return;
             }
-            if (st != PilotDismounted.PilotState.landing)
+            bool down = st == PilotDismounted.PilotState.landing || DummyOnGround(pd);
+            if (!down)
                 return;
             if (!_chuteArmed)
             {
                 _chuteArmed = true;
-                _chuteReadyAt = Time.unscaledTime + 0.65f;
+                _chuteReadyAt = Time.unscaledTime + 0.35f;
                 return;
             }
             if (Time.unscaledTime < _chuteReadyAt)
                 return;
             if (Active)
+                return;
+            EnterFromChute(pd);
+        }
+
+        private static bool DummyOnGround(PilotDismounted pd)
+        {
+            if (pd == null)
+                return false;
+            try
+            {
+                Vector3 pos = pd.transform.position;
+                RaycastHit hit;
+                if (!Physics.Raycast(pos + Vector3.up * 2f, Vector3.down, out hit, 6f,
+                    ~0, QueryTriggerInteraction.Ignore))
+                    return false;
+                float agl = pos.y - hit.point.y;
+                if (agl > 2.4f)
+                    return false;
+                Vector3 v = Vector3.zero;
+                if (pd.rb != null)
+                    v = pd.rb.velocity;
+                if (v.y < -6f)
+                    return false;
+                return pd.animationState == PilotDismounted.PilotState.parachuting
+                    || pd.animationState == PilotDismounted.PilotState.landing;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void EnterFromChute(PilotDismounted pd)
+        {
+            if (pd == null || Active)
                 return;
             Vector3 pos = pd.transform.position;
             RaycastHit hit;
@@ -780,6 +1070,60 @@ namespace GroundArsenal
                 ~0, QueryTriggerInteraction.Ignore))
                 pos = hit.point + Vector3.up * 0.08f;
             float yaw = pd.transform.rotation.eulerAngles.y;
+            NeutralizeDummy(pd);
+            _chuteDummy = pd;
+            _parked = null;
+            AirHop = false;
+            SpawnPawn(pos, yaw);
+            GaCombat.ApplyCarryOnly();
+            GaCombat.AttachViews(_eye);
+            HoldFlightControls();
+            try { CameraStateManager.cameraMode = CameraMode.free; }
+            catch { }
+            try { CameraStateManager.enableMouseLook = false; }
+            catch { }
+            HideAircraftHud();
+            KickCockpitCam();
+            _chuteArmed = false;
+        }
+
+        internal static void NeutralizeDummy(PilotDismounted pd)
+        {
+            if (pd == null)
+                return;
+            try { pd.SetCollidable(false); }
+            catch { }
+            try
+            {
+                CharacterController cc = pd.GetComponent<CharacterController>();
+                if (cc != null)
+                    cc.enabled = false;
+            }
+            catch { }
+            try
+            {
+                if (pd.rb != null)
+                {
+                    pd.rb.detectCollisions = false;
+                    pd.rb.isKinematic = true;
+                    pd.rb.velocity = Vector3.zero;
+                    pd.rb.angularVelocity = Vector3.zero;
+                }
+            }
+            catch { }
+            try
+            {
+                Collider[] cols = pd.GetComponentsInChildren<Collider>(true);
+                if (cols != null)
+                {
+                    for (int i = 0; i < cols.Length; i++)
+                    {
+                        if (cols[i] != null)
+                            cols[i].enabled = false;
+                    }
+                }
+            }
+            catch { }
             try
             {
                 Renderer[] rs = pd.GetComponentsInChildren<Renderer>(true);
@@ -793,11 +1137,6 @@ namespace GroundArsenal
                 }
             }
             catch { }
-            _chuteDummy = pd;
-            SpawnPawn(pos, yaw);
-            GaCombat.ApplyCarryOnly();
-            GaCombat.AttachViews(_eye);
-            _chuteArmed = false;
         }
     }
 }

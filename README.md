@@ -1,49 +1,19 @@
 # Ground Arsenal
 
-Standalone **Nuclear Option** BepInEx infantry plugin. **No compile-time Oritasy, Blueprinter, BIA, or Icarus reference.** Soft-depends Oritasy only so it can pause that pack’s FPS if both are installed.
+Standalone **Nuclear Option** BepInEx plugin: local first-person infantry. No compile-time dependency on Oritasy.
 
-Version **1.2.0**.
+Requires **BIA** (`BIA.Runtime_*.dll`, GUID `bia.runtime`). If Oritasy is also installed, this plugin pauses Oritasy infantry via reflection so the two FPS modes do not double-run.
 
-## Honest gun count
-
-| Source | Count |
-| --- | --- |
-| Quaternius Ultimate Guns (CC0) | 43 bodies |
-| loafbrr pistol / AK / revolver (CC0) | 3 |
-| Original infantry meshes (AT-4, RBS 70, G11) | 3 |
-| **Selectable catalog** | **49** |
-
-Accessories (`acc_*`) and family placeholders are not extra guns. There is no 300-gun CC0 download.
+Version **1.2.13**.
 
 ## Play
 
-Hangar aircraft-select overlay is always available:
-
-- Toggle **Infantry ENABLED / DISABLED** to run this system alone (config: `Infantry.Enabled`).
-- Pick hotbar guns. **Slot 1 = carry-on** (hop-out / chute).
-- **DEPLOY** charges the **sum of unique guns** on the hotbar (same `Allocation` millions as aircraft). Pistol 0.12M … assault rifle 0.45M … AT-4 1.45M … RBS 70 2.80M. Hop-out does not charge again.
-- In the field: **G** arsenal, **1–9** / wheel, **LMB** fire, **RMB** ads (scroll zooms while aiming; rockets cannot ads), **R** reload, **U** board, **'** armor table (every encyclopedia vehicle / ship / aircraft).
-- **SHIFT** tap starts a 60s sprint (3s cooldown). **SPACE** jumps ~8 m (3s cooldown). Both show as rings at the bottom of the HUD.
-- Helmet HUD: visor, compass, EXO panel, weapon strip with icon, ADS/scope overlay.
-- Hits always spark at the impact point. Shot streaks are **off** (`Combat.ShowTracers = false`).
-- Perf line: FPS + live spark count (`Debug.ShowPerf`).
-
-Config file: `BepInEx/config/com.iallemege.groundarsenal.cfg`
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| Infantry.Enabled | true | Master switch |
-| Infantry.PauseOritasyFps | true | If Oritasy is present, skip its infantry Tick/Draw |
-| Combat.ShowTracers | false | Optional streak |
-| Debug.ShowPerf | true | FPS overlay |
-
-To test **independence / performance**: leave this plugin on, set `PauseOritasyFps = true` (or disable `OritasyInfantry.dll`), deploy, watch the FPS line. Ground Arsenal does not reference Blueprinter 2.0.0.
-
-## Install
-
-1. Drop `GroundArsenal.dll` into `BepInEx/plugins/`.
-2. Drop the `GroundArsenal/` folder (weapon OBJ / PNG / `kits.txt`) next to the DLL.
-3. **Fully quit Steam**, then start the game.
+- Overlay only while hangar **aircraft-select** is open (not cockpit, map, or faction join). Panel sits on the **left**. **1–9** pick hotbar slot, then **Deploy Infantry**. Guns unlock with your mission **rank**.
+- Buy a jet while on foot: aircraft HUD stays off until you walk up and press **U** to board.
+- Field: **G** arsenal (filter by family). Click a gun to put it on the current hotbar slot.
+- **1–9** / mouse wheel: hotbar. **LMB** fire, **RMB** ads (lock on launchers), **R** reload, **U** hop out / board.
+- Hangar deploy uses the full hotbar. Hop-out and parachute landing use slot 1 only.
+- Approach wrecks to pick up matching ammunition.
 
 ## Build
 
@@ -53,8 +23,23 @@ Windows, game at `d:\Steam\steamapps\common\Nuclear Option`:
 build.bat
 ```
 
-C# 5 / `csc`. Copies the DLL and `assets/Weapons/*` into plugins.
+Copies `GroundArsenal.dll` and `assets/Weapons/*` into `BepInEx/plugins/`.
+
+Fully quit Steam after installing.
+
+## Assets
+
+Viewmodels are downloaded CC0 meshes (loafbrr / Quaternius / byzmod3d) plus AT-4, RBS 70, and G11.
+
+```
+python tools/fetch_cc0_hd.py
+F:\blender\blender.exe -b --python ..\..\Blender\scripts\export_loafbrr_parts.py
+python tools/gen_kits.py
+build.bat
+```
+
+Fully quit Steam after installing.
 
 ## License
 
-Code: MIT. Weapon meshes/textures: CC0 (Quaternius, loafbrr) or original infantry analogues. See `assets/LICENSE_ASSETS.txt`.
+Code: MIT. Weapon meshes/textures: CC0 or original analogues (not ripped commercial CAD).

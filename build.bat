@@ -53,7 +53,9 @@ if not exist "%MANAGED%\Assembly-CSharp.dll" (
   "%ROOT%src\GaIcons.cs" ^
   "%ROOT%src\GaVehicleArmor.cs" ^
   "%ROOT%src\GaConfig.cs" ^
-  "%ROOT%src\GaFunds.cs"
+  "%ROOT%src\GaFunds.cs" ^
+  "%ROOT%src\GaLoot.cs" ^
+  "%ROOT%src\GaRadar.cs"
 
 if errorlevel 1 (
   echo GROUND ARSENAL BUILD FAILED

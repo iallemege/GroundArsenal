@@ -86,6 +86,59 @@ namespace GroundArsenal
             return false;
         }
 
+        internal static bool NukeOverlayActive()
+        {
+            return ReadBool("Oritasy.NukeFlashService", "Active");
+        }
+
+        internal static bool EmpStunned()
+        {
+            if (NukeOverlayActive())
+                return true;
+            return CallBool("Oritasy.EmpPulseService", "LocalPlayerStunned");
+        }
+
+        private static bool ReadBool(string typeName, string prop)
+        {
+            Type t = FindType(typeName);
+            if (t == null)
+                return false;
+            try
+            {
+                PropertyInfo p = t.GetProperty(prop,
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p == null)
+                    return false;
+                object v = p.GetValue(null, null);
+                return v is bool && (bool)v;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool CallBool(string typeName, string method)
+        {
+            Type t = FindType(typeName);
+            if (t == null)
+                return false;
+            try
+            {
+                MethodInfo m = t.GetMethod(method,
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, Type.EmptyTypes, null);
+                if (m == null)
+                    return false;
+                object v = m.Invoke(null, null);
+                return v is bool && (bool)v;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         internal static void RememberShot(int penGrade, Vector3 incoming, bool pureKe)
         {
             Type t = FindType("Oritasy.ModularArmorService");

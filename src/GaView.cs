@@ -60,6 +60,7 @@ namespace GroundArsenal
         private static float _reloadDur = 1.6f;
         private static float _kickUntil;
         private static float _bodyScale = 1f;
+        private static Quaternion _aimRot = Quaternion.Euler(0f, 180f, 0f);
 
         internal static void Attach(Transform eye)
         {
@@ -147,6 +148,17 @@ namespace GroundArsenal
         {
             if (Time.time < _reloadUntil)
                 return;
+            GaGun g = GaCombat.Current;
+            if (g != null)
+            {
+                _kickAmt = 0.007f + g.Damage * 0.0005f + g.Spread * 0.35f;
+                float rpm = g.Rpm;
+                if (rpm < 40f)
+                    rpm = 40f;
+                _kickDur = 0.05f + (60f / rpm) * 0.42f;
+                if (_kickDur > 0.22f)
+                    _kickDur = 0.22f;
+            }
             _kickUntil = Time.time + _kickDur;
         }
 
@@ -158,8 +170,7 @@ namespace GroundArsenal
             if (cam != null)
                 BindToCamera(cam);
             Show(false);
-            bool hide = (GaCombat.IsSniper() && GaCombat.Ads > 0.45f)
-                || (GaCombat.IsG11() && GaCombat.Ads > 0.42f);
+            bool hide = GaCombat.Ads > 0.42f;
             _hold.SetActive(!hide);
             if (_root != null)
             {
@@ -394,6 +405,7 @@ namespace GroundArsenal
             Mesh bodyMesh = LoadMesh(kit != null ? kit.Body : null);
             if (bodyMesh == null)
                 bodyMesh = LoadMesh("fam_" + fam.ToString("00") + ".obj");
+            _aimRot = AimFromMesh(bodyMesh);
             Material mat = MatFor(kit);
             _body = MakePart("Body", bodyMesh, mat);
             bool cubeBody = false;
@@ -527,8 +539,24 @@ namespace GroundArsenal
             go.layer = 0;
             go.transform.SetParent(_hold.transform, false);
             go.transform.localPosition = Vector3.zero;
-            go.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+            go.transform.localRotation = _aimRot;
             return go;
+        }
+
+        /// <summary>
+        /// Quaternius / loafbrr barrels sit on +X. Original infantry meshes sit on -Z.
+        /// Aim so the muzzle points down the camera +Z.
+        /// </summary>
+        private static Quaternion AimFromMesh(Mesh mesh)
+        {
+            if (mesh == null)
+                return Quaternion.Euler(0f, 180f, 0f);
+            Vector3 sz = mesh.bounds.size;
+            if (sz.x >= sz.z * 1.12f && sz.x >= sz.y)
+                return Quaternion.Euler(0f, -90f, 0f);
+            if (sz.y > sz.x && sz.y > sz.z)
+                return Quaternion.Euler(-90f, 0f, 0f);
+            return Quaternion.Euler(0f, 180f, 0f);
         }
 
         private static GameObject MakeCube(string name, float wantLen, Material mat)

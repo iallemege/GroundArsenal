@@ -10,10 +10,11 @@ namespace GroundArsenal
     {
         internal const string GUID = "com.iallemege.groundarsenal";
         internal const string Name = "Ground Arsenal";
-        internal const string Version = "1.2.0";
+        internal const string Version = "1.2.13";
     }
 
     [BepInPlugin(GaInfo.GUID, GaInfo.Name, GaInfo.Version)]
+    [BepInDependency("bia.runtime")]
     [BepInDependency("com.iallemege.oritasy", BepInDependency.DependencyFlags.SoftDependency)]
     public class GaPlugin : BaseUnityPlugin
     {

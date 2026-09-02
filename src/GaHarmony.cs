@@ -1,5 +1,6 @@
 using System.Reflection;
 using HarmonyLib;
+using NuclearOption.Networking;
 using UnityEngine;
 
 namespace GroundArsenal
@@ -85,6 +86,39 @@ namespace GroundArsenal
         }
     }
 
+    [HarmonyPatch(typeof(PilotDismounted), "Update")]
+    internal static class GaPatch_DummyUpdate
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix()
+        {
+            return !GaMode.Active;
+        }
+    }
+
+    [HarmonyPatch(typeof(PilotDismounted), "FixedUpdate")]
+    internal static class GaPatch_DummyFixed
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix()
+        {
+            return !GaMode.Active;
+        }
+    }
+
+    [HarmonyPatch(typeof(PilotDismounted), "LocalFixedUpdate")]
+    internal static class GaPatch_DummyLocalFixed
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix()
+        {
+            return !GaMode.Active;
+        }
+    }
+
     [HarmonyPatch(typeof(DamageEffects), "ArmorPenetrate")]
     internal static class GaPatch_ArmorPenetrate
     {
@@ -93,6 +127,61 @@ namespace GroundArsenal
             float pierceDamage, float blastDamage, PersistentID dealerID)
         {
             GaMode.TryAbsorbWorldHit(position, velocity, pierceDamage, blastDamage, dealerID);
+        }
+    }
+
+    [HarmonyPatch(typeof(FlightHud), "EnableCanvas")]
+    internal static class GaPatch_FlightHudCanvas
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix(bool enable)
+        {
+            if (GaMode.Active && enable)
+                return false;
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(CameraStateManager), "SwitchState")]
+    internal static class GaPatch_CamSwitch
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix(CameraStateManager __instance, CameraBaseState state)
+        {
+            return !GaMode.BlockCockpitSwitch(__instance, state);
+        }
+    }
+
+    [HarmonyPatch(typeof(NuclearOption.Networking.Player), "SetAircraft")]
+    internal static class GaPatch_PlayerSetAircraft
+    {
+        [HarmonyPostfix]
+        private static void Postfix(NuclearOption.Networking.Player __instance, Aircraft aircraft)
+        {
+            GaMode.OnPlayerSetAircraft(__instance, aircraft);
+        }
+    }
+
+    [HarmonyPatch(typeof(Aircraft), "SetupLocalPlayerAndUI")]
+    internal static class GaPatch_AircraftLocalUi
+    {
+        [HarmonyPostfix]
+        private static void Postfix(Aircraft __instance)
+        {
+            GaMode.OnLocalAircraftUi(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(CombatHUD), "SetAircraft")]
+    internal static class GaPatch_CombatHudSet
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix()
+        {
+            return !GaMode.Active;
         }
     }
 }
