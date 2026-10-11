@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace GroundArsenal
@@ -8,7 +9,10 @@ namespace GroundArsenal
         internal static bool CatalogOpen;
         internal static bool BlocksLook
         {
-            get { return ArsenalOpen || CatalogOpen; }
+            get
+            {
+                return ArsenalOpen || CatalogOpen || GaShop.Open || GaGarage.Open || GaHangar.FieldOpen;
+            }
         }
 
         private static GUIStyle _label;
@@ -19,8 +23,12 @@ namespace GroundArsenal
         private static GUIStyle _hudTick;
         private static GUIStyle _title;
         private static GUIStyle _offline;
+        private static GUIStyle _chute;
         private static GUIStyle _btn;
         private static GUIStyle _btnOn;
+        private static GUIStyle _ammo;
+        private static GUIStyle _hpNum;
+        private static GUIStyle _center;
         private static Texture2D _px;
         private static Texture2D _visor;
         private static Texture2D _scopeMask;
@@ -30,6 +38,9 @@ namespace GroundArsenal
         private static bool _styles;
         private static string _flash;
         private static float _flashUntil;
+        private static int _moveHudPhase;
+        private static float _rng;
+        private static float _rngAt;
 
         internal static void FlashHit(string msg)
         {
@@ -39,13 +50,20 @@ namespace GroundArsenal
 
         internal static void Tick()
         {
-            if (Input.GetKeyDown(KeyCode.G))
+            if (Input.GetKeyDown(KeyCode.M) && !GaRadio.Open)
             {
-                ArsenalOpen = !ArsenalOpen;
-                if (ArsenalOpen)
-                    CatalogOpen = false;
-                Cursor.lockState = BlocksLook ? CursorLockMode.None : CursorLockMode.Locked;
-                Cursor.visible = BlocksLook;
+                GaHangar.ToggleField();
+                return;
+            }
+            if (GaHangar.FieldOpen)
+            {
+                if (Input.GetKeyDown(KeyCode.Escape))
+                {
+                    CloseMenus();
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                }
+                return;
             }
             if (Input.GetKeyDown(KeyCode.N) || Input.GetKeyDown(KeyCode.Quote))
             {
@@ -70,8 +88,33 @@ namespace GroundArsenal
         {
             ArsenalOpen = false;
             CatalogOpen = false;
+            GaShop.Close();
+            GaGarage.Close();
+            GaHangar.CloseField();
         }
 
+        internal static void OnSpawn()
+        {
+            GaFxUi.OnSpawn();
+        }
+
+        internal static void OnDeath()
+        {
+            GaFxUi.OnDeath();
+        }
+
+        internal static void NoteSlot()
+        {
+            GaFxUi.OnGun();
+        }
+
+        internal static void DrawKiaScreen()
+        {
+            Ensure();
+            DrawKia();
+        }
+
+        [SkipLocalsInit]
         internal static void Draw()
         {
             Ensure();
@@ -79,41 +122,228 @@ namespace GroundArsenal
                 return;
             if (GaMode.Dead)
             {
-                Color prevD = GUI.color;
-                GUI.color = new Color(0f, 0f, 0f, 1f);
-                GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), _px);
-                GUI.color = new Color(0.95f, 0.22f, 0.16f, 1f);
-                GUI.Label(new Rect(Screen.width * 0.5f - 280f, Screen.height * 0.42f, 560f, 40f),
-                    "EXO-10 OFFLINE", _offline);
-                GUI.color = prevD;
+                DrawKia();
                 return;
             }
-            DrawVisor();
-            DrawCompass();
-            DrawSuitPanel();
-            DrawSysRail();
-            DrawWeaponStrip();
-            DrawSkillRings();
-            DrawHelmetReticle();
-            DrawHipAssist();
-            DrawLockBox();
-            DrawAds();
-            DrawMuzzleBloom();
-            DrawLootHint();
+            _moveHudPhase++;
+            float hud = GaFxUi.Smooth(GaFxUi.Hud);
+            Color prev = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, hud);
+            DrawHurtVignette();
+            if (GaTsf.Owns())
+            {
+                DrawLockBox();
+                DrawInteract();
+                DrawLootHint();
+                GaTsf.Draw();
+            }
+            else
+            {
+                DrawCompass();
+                DrawCrosshair();
+                DrawLockBox();
+                DrawAds();
+                DrawMuzzleBloom();
+                DrawFpsHealth();
+                DrawFpsAmmo();
+                DrawGunPop();
+                DrawInteract();
+                DrawChutePrompt();
+                DrawLootHint();
+                GaJet.Draw();
+            }
             DrawParkedMark();
-            GaRadar.Draw();
             DrawPerf();
             if (Time.unscaledTime < _flashUntil && !string.IsNullOrEmpty(_flash))
-                GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.22f, 440f, 28f), _flash, _title);
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, 46f, 440f, 24f), _flash, _title);
             if (Time.unscaledTime < GaMode.DenyUntil && !string.IsNullOrEmpty(GaMode.DenyMsg))
-                GUI.Label(new Rect(18f, 176f, 720f, 22f), GaMode.DenyMsg, _label);
-            if (ArsenalOpen)
+                GUI.Label(new Rect(Screen.width * 0.5f - 220f, 70f, 440f, 22f), GaMode.DenyMsg, _label);
+            GUI.color = prev;
+            DrawMenus();
+        }
+
+        private static void DrawKia()
+        {
+            float a = GaFxUi.Smooth(GaFxUi.Kia);
+            if (a < 0.01f)
+                a = 1f;
+            Color prev = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, a);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), _px);
+            GUI.color = new Color(0.95f, 0.18f, 0.12f, a);
+            GUI.Label(new Rect(Screen.width * 0.5f - 280f, Screen.height * 0.40f, 560f, 44f),
+                "KIA", _offline);
+            GUI.color = new Color(0.85f, 0.85f, 0.82f, a * 0.85f);
+            string cause = GaMode.DeathCause;
+            if (string.IsNullOrEmpty(cause))
+                cause = "KIA";
+            GUI.Label(new Rect(Screen.width * 0.5f - 280f, Screen.height * 0.48f, 560f, 24f),
+                cause, _center);
+            GUI.Label(new Rect(Screen.width * 0.5f - 280f, Screen.height * 0.53f, 560f, 22f),
+                GaForce.Label() + "  /  " + GaClass.Name(), _center);
+            GUI.color = prev;
+        }
+
+        private static void DrawMenus()
+        {
+            float a = GaFxUi.Smooth(GaFxUi.Arsenal);
+            if (a > 0.02f)
             {
+                GaFxUi.Dim(a);
+                bool was = GUI.enabled;
+                GUI.enabled = ArsenalOpen;
+                Vector2 pivot = new Vector2(_win.x + _win.width * 0.5f, _win.y + 40f);
+                GaFxUi.Push(a, pivot, 28f);
                 _win = GUI.Window(0x47415253, _win, DrawArsenal,
-                    "Weapons  (" + GaCatalog.Count.ToString() + " modeled)");
+                    "REARM CRATE  —  F close");
+                GaFxUi.Pop();
+                GUI.enabled = was;
             }
             if (CatalogOpen)
                 ArmorCatalogService.Draw();
+        }
+
+        private static void DrawHurtVignette()
+        {
+            float hp = GaMode.Hp / GaMode.MaxHp;
+            if (hp > 0.72f)
+                return;
+            float a = (0.72f - hp) / 0.72f;
+            if (GaMode.Downed)
+                a = 0.72f;
+            float edge = Mathf.Lerp(48f, 140f, a);
+            Color top = new Color(0.45f, 0.02f, 0.02f, 0.55f * a);
+            Color fade = new Color(0.45f, 0.02f, 0.02f, 0f);
+            GaFxUi.FillGrad(new Rect(0f, 0f, Screen.width, edge), top, fade);
+            GaFxUi.FillGrad(new Rect(0f, Screen.height - edge, Screen.width, edge), fade, top);
+            Color prev = GUI.color;
+            GUI.color = new Color(0.45f, 0.02f, 0.02f, 0.28f * a);
+            GUI.DrawTexture(new Rect(0f, 0f, edge * 0.45f, Screen.height), _px);
+            GUI.DrawTexture(new Rect(Screen.width - edge * 0.45f, 0f, edge * 0.45f, Screen.height), _px);
+            GUI.color = prev;
+        }
+
+        private static void DrawCrosshair()
+        {
+            if (GaRide.Busy)
+                return;
+            if (GaCombat.Ads >= 0.22f)
+                return;
+            float cx = Screen.width * 0.5f;
+            float cy = Screen.height * 0.5f;
+            float spread = 6f + GaMode.MoveSpeed * 1.45f + GaCombat.BloomAmt * 14f;
+            if (GaMode.SprintActive)
+                spread += 5f;
+            if (GaFps.Stance == 1)
+                spread -= 1.5f;
+            if (GaFps.Stance == 2)
+                spread -= 2.5f;
+            if (spread < 4f)
+                spread = 4f;
+            Color prev = GUI.color;
+            GUI.color = new Color(0.95f, 0.97f, 0.92f, 0.88f);
+            float arm = 9f;
+            float th = 2f;
+            GUI.DrawTexture(new Rect(cx - spread - arm, cy - th * 0.5f, arm, th), _px);
+            GUI.DrawTexture(new Rect(cx + spread, cy - th * 0.5f, arm, th), _px);
+            GUI.DrawTexture(new Rect(cx - th * 0.5f, cy - spread - arm, th, arm), _px);
+            GUI.DrawTexture(new Rect(cx - th * 0.5f, cy + spread, th, arm), _px);
+            GUI.DrawTexture(new Rect(cx - 1.5f, cy - 1.5f, 3f, 3f), _px);
+            GUI.color = prev;
+        }
+
+        private static void DrawFpsHealth()
+        {
+            float x = 22f;
+            float y = Screen.height - 108f;
+            GaFxUi.FillGrad(new Rect(x, y, 248f, 88f),
+                new Color(0.02f, 0.04f, 0.05f, 0.55f),
+                new Color(0.02f, 0.04f, 0.05f, 0.18f));
+            float hp = GaMode.Hp / GaMode.MaxHp;
+            if (hp < 0f) hp = 0f;
+            if (hp > 1f) hp = 1f;
+            Color hc = hp < 0.35f ? new Color(1f, 0.28f, 0.18f) : new Color(0.35f, 0.92f, 0.42f);
+            GUI.Label(new Rect(x + 10f, y + 4f, 80f, 36f), Mathf.RoundToInt(GaMode.Hp).ToString(), _hpNum);
+            Color prev = GUI.color;
+            GUI.color = new Color(0.08f, 0.1f, 0.1f, 0.8f);
+            GUI.DrawTexture(new Rect(x + 88f, y + 18f, 148f, 10f), _px);
+            GUI.color = hc;
+            GUI.DrawTexture(new Rect(x + 88f, y + 18f, 148f * hp, 10f), _px);
+            float fat = 1f - GaMode.ArmorFatigue;
+            GUI.color = new Color(0.08f, 0.1f, 0.1f, 0.8f);
+            GUI.DrawTexture(new Rect(x + 88f, y + 32f, 148f, 6f), _px);
+            GUI.color = new Color(0.55f, 0.78f, 1f, 0.95f);
+            GUI.DrawTexture(new Rect(x + 88f, y + 32f, 148f * fat, 6f), _px);
+            float sp = GaMode.SprintFill();
+            GUI.color = new Color(0.08f, 0.1f, 0.1f, 0.8f);
+            GUI.DrawTexture(new Rect(x + 10f, y + 48f, 226f, 5f), _px);
+            GUI.color = GaMode.SprintActive
+                ? new Color(0.35f, 0.95f, 1f, 0.95f)
+                : new Color(0.85f, 0.82f, 0.35f, 0.9f);
+            GUI.DrawTexture(new Rect(x + 10f, y + 48f, 226f * sp, 5f), _px);
+            GUI.color = new Color(0.82f, 0.88f, 0.84f, 0.9f);
+            GUI.Label(new Rect(x + 10f, y + 58f, 226f, 24f),
+                GaClass.Name() + "  " + GaFps.StanceLabel()
+                    + "  " + GaDropSquad.FriendsAlive.ToString() + " squad",
+                _hudTiny);
+            GUI.color = prev;
+        }
+
+        private static void DrawFpsAmmo()
+        {
+            if (GaRide.Busy)
+                return;
+            GaGun g = GaCombat.Current;
+            if (g == null)
+                return;
+            GaIcons.Ensure();
+            DrawMagRow(Screen.width - 220f, Screen.height - 48f, g);
+        }
+
+        private static void DrawGunPop()
+        {
+            float a = GaFxUi.Smooth(GaFxUi.GunPop);
+            if (a < 0.02f)
+                return;
+            GaGun g = GaCombat.Current;
+            if (g == null)
+                return;
+            Color prev = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, a);
+            GUI.Label(new Rect(Screen.width * 0.5f - 180f, Screen.height * 0.48f, 360f, 28f),
+                g.En, _center);
+            GUI.color = prev;
+        }
+
+        private static void DrawInteract()
+        {
+            string radio = GaRadio.Tip();
+            if (string.IsNullOrEmpty(radio))
+            {
+                Aircraft claimed = GaMode.ParkedAircraft;
+                if (claimed != null)
+                {
+                    try
+                    {
+                        if (!claimed.disabled)
+                            radio = "T  board marked jet";
+                    }
+                    catch { }
+                }
+            }
+            if (string.IsNullOrEmpty(radio))
+                return;
+            Color prev = GUI.color;
+            GUI.color = new Color(0.95f, 0.95f, 0.9f, 0.9f);
+            GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height - 38f, 440f, 22f),
+                radio, _center);
+            GUI.color = prev;
+        }
+
+        internal static void DrawVisorFrame()
+        {
+            Ensure();
+            DrawVisor();
         }
 
         private static void DrawVisor()
@@ -156,9 +386,9 @@ namespace GroundArsenal
             float x = Screen.width * 0.5f - w * 0.5f;
             float y = 10f;
             Color prev = GUI.color;
-            GUI.color = new Color(0.02f, 0.08f, 0.09f, 0.62f);
-            GUI.DrawTexture(new Rect(x, y, w, 28f), _px);
-            GUI.color = new Color(0.25f, 0.95f, 0.82f, 0.9f);
+            GUI.color = new Color(0.02f, 0.04f, 0.05f, 0.42f);
+            GUI.DrawTexture(new Rect(x, y, w, 24f), _px);
+            GUI.color = new Color(0.92f, 0.95f, 0.9f, 0.92f);
             GUI.DrawTexture(new Rect(Screen.width * 0.5f - 1f, y, 2f, 28f), _px);
             float pxPerDeg = w / 90f;
             for (int d = -50; d <= 50; d += 5)
@@ -169,7 +399,7 @@ namespace GroundArsenal
                     continue;
                 bool major = (Mathf.RoundToInt(hdg) % 15) == 0;
                 float tickH = major ? 10f : 5f;
-                GUI.color = new Color(0.3f, 0.95f, 0.85f, major ? 0.9f : 0.4f);
+                GUI.color = new Color(0.9f, 0.93f, 0.88f, major ? 0.9f : 0.35f);
                 GUI.DrawTexture(new Rect(tx - 0.5f, y + 28f - tickH, 1.5f, tickH), _px);
                 if (!major)
                     continue;
@@ -183,7 +413,7 @@ namespace GroundArsenal
                 else if (ih == 270) lab = "W";
                 GUI.Label(new Rect(tx - 14f, y + 2f, 28f, 16f), lab, _hudTick);
             }
-            GUI.color = new Color(0.7f, 1f, 0.9f, 0.85f);
+            GUI.color = new Color(0.9f, 0.95f, 0.88f, 0.85f);
             GUI.Label(new Rect(x + w + 8f, y + 4f, 72f, 20f),
                 Mathf.RoundToInt(Mathf.Repeat(yaw, 360f)).ToString("000") + "°", _hud);
             GUI.color = prev;
@@ -231,7 +461,7 @@ namespace GroundArsenal
             float y = 36f;
             Color prev = GUI.color;
             GUI.color = new Color(0.02f, 0.07f, 0.08f, 0.72f);
-            GUI.DrawTexture(new Rect(x, y, w, 108f), _px);
+            GUI.DrawTexture(new Rect(x, y, w, GaChute.Falling ? 168f : 148f), _px);
             GUI.color = new Color(0.25f, 0.95f, 0.82f, 0.55f);
             GUI.DrawTexture(new Rect(x, y, w, 2f), _px);
             GUI.color = new Color(0.35f, 1f, 0.88f, 0.95f);
@@ -243,6 +473,15 @@ namespace GroundArsenal
                 "SERVO  " + (GaMode.ServoHeat() >= 0.72f ? "LIMIT" : "READY"), _hudTiny);
             GUI.Label(new Rect(x + 8f, y + 86f, w - 12f, 18f),
                 "PLATE  " + GaMode.OuterEffective() + " / " + GaMode.InnerArmor, _hudTiny);
+            GUI.Label(new Rect(x + 8f, y + 106f, w - 12f, 18f),
+                "SQUAD  " + GaDropSquad.FriendsAlive + "   FOE  " + GaDropSquad.HostilesAlive, _hudTiny);
+            GUI.Label(new Rect(x + 8f, y + 126f, w - 12f, 18f),
+                GaForce.Label() + "  " + GaClass.Name(), _hudTiny);
+            if (GaChute.Falling)
+            {
+                GUI.color = new Color(0.95f, 0.82f, 0.25f, 0.95f);
+                GUI.Label(new Rect(x + 8f, y + 146f, w - 12f, 18f), GaChute.Hint(), _hudTiny);
+            }
             GUI.color = prev;
         }
 
@@ -267,10 +506,7 @@ namespace GroundArsenal
             GUI.DrawTexture(new Rect(cx - 22f, cy + 14f, 1.5f, 8f), _px);
             GUI.DrawTexture(new Rect(cx + 14f, cy + 20.5f, 8f, 1.5f), _px);
             GUI.DrawTexture(new Rect(cx + 20.5f, cy + 14f, 1.5f, 8f), _px);
-            RaycastHit hit;
-            float rng = 0f;
-            if (Physics.Raycast(GaMode.EyePos, GaMode.EyeFwd, out hit, 2400f, ~0, QueryTriggerInteraction.Ignore))
-                rng = hit.distance;
+            float rng = CachedRange();
             GUI.color = new Color(0.45f, 1f, 0.88f, 0.75f);
             GUI.Label(new Rect(cx - 40f, cy + 26f, 80f, 14f),
                 rng > 0.4f ? ("RNG " + Mathf.RoundToInt(rng).ToString() + "m") : "RNG ----",
@@ -278,11 +514,26 @@ namespace GroundArsenal
             GUI.color = prev;
         }
 
+        private static float CachedRange()
+        {
+            if (Time.unscaledTime < _rngAt)
+                return _rng;
+            if (GaPerfFrameGate.SkipPolish() && _rngAt > 0f)
+                return _rng;
+            _rngAt = Time.unscaledTime + (GaMode.MoveSpeed > 0.8f ? 0.32f : 0.2f);
+            _rng = 0f;
+            RaycastHit hit;
+            if (Physics.Raycast(GaMode.EyePos, GaMode.EyeFwd, out hit, 400f,
+                GaPhys.WorldMask, QueryTriggerInteraction.Ignore))
+                _rng = hit.distance;
+            return _rng;
+        }
+
         private static void DrawHipAssist()
         {
             if (!GaCombat.AssistOn || GaCombat.Ads >= 0.2f)
                 return;
-            Camera cam = Camera.main;
+            Camera cam = GaPerfFrameGate.Cam();
             if (cam == null)
                 return;
             Vector3 sp = cam.WorldToScreenPoint(GaCombat.AssistWorld);
@@ -311,7 +562,7 @@ namespace GroundArsenal
                 return;
             if (GaCombat.LockAmt < 0.12f)
                 return;
-            Camera cam = Camera.main;
+            Camera cam = GaPerfFrameGate.Cam();
             if (cam == null)
                 return;
             Vector3 world = GaCombat.LockTgt.transform.position;
@@ -331,22 +582,17 @@ namespace GroundArsenal
             bool ready = GaCombat.LockReady;
             float a = ready ? 1f : (0.35f + GaCombat.LockAmt * 0.55f);
             Color prev = GUI.color;
-            GUI.color = new Color(1f, 0.08f, 0.05f, a);
-            Vector2 c = new Vector2(x, y);
-            DrawSeg(c + new Vector2(0f, -s), c + new Vector2(s, 0f), 3.2f);
-            DrawSeg(c + new Vector2(s, 0f), c + new Vector2(0f, s), 3.2f);
-            DrawSeg(c + new Vector2(0f, s), c + new Vector2(-s, 0f), 3.2f);
-            DrawSeg(c + new Vector2(-s, 0f), c + new Vector2(0f, -s), 3.2f);
+            GaFxUi.Corners(x, y, s, new Color(1f, 0.16f, 0.1f, a));
             if (ready)
             {
                 bool blink = ((int)(Time.unscaledTime * 6f) % 2) == 0;
                 GUI.color = new Color(1f, blink ? 0.18f : 0.55f, 0.08f, 1f);
-                GUI.Label(new Rect(x - 40f, y + s + 6f, 80f, 20f), "FIRE", _title);
+                GUI.Label(new Rect(x - 40f, y + s * 0.5f + 6f, 80f, 20f), "FIRE", _title);
             }
             else
             {
                 GUI.color = new Color(1f, 0.35f, 0.15f, a);
-                GUI.Label(new Rect(x - 40f, y + s + 6f, 80f, 16f),
+                GUI.Label(new Rect(x - 40f, y + s * 0.5f + 6f, 80f, 16f),
                     Mathf.RoundToInt(GaCombat.LockAmt * 100f).ToString() + "%", _tiny);
             }
             GUI.color = prev;
@@ -398,37 +644,54 @@ namespace GroundArsenal
             GaGun g = GaCombat.Current;
             string n = g != null ? g.En : "?";
             float x = 18f;
-            float barY = Screen.height - 108f;
+            float barY = Screen.height - 96f;
             Color prev = GUI.color;
             GUI.color = new Color(0.02f, 0.08f, 0.09f, 0.78f);
-            GUI.DrawTexture(new Rect(x, barY, 520f, 92f), _px);
+            GUI.DrawTexture(new Rect(x, barY, 460f, 80f), _px);
             GUI.color = new Color(0.25f, 0.95f, 0.82f, 0.7f);
-            GUI.DrawTexture(new Rect(x, barY, 520f, 2f), _px);
+            GUI.DrawTexture(new Rect(x, barY, 460f, 2f), _px);
             GUI.color = Color.white;
             Texture2D cur = g != null ? GaIcons.Get(g) : null;
             float tx = x + 10f;
             if (cur != null)
             {
-                GUI.DrawTexture(new Rect(x + 8f, barY + 8f, 130f, 58f), cur, ScaleMode.ScaleToFit);
-                tx = x + 146f;
+                GUI.DrawTexture(new Rect(x + 8f, barY + 6f, 140f, 68f), cur, ScaleMode.ScaleToFit);
+                tx = x + 156f;
             }
-            GUI.Label(new Rect(tx, barY + 4f, 360f, 20f),
-                "[" + (GaCombat.Slot + 1).ToString() + "]  " + n
-                    + "   RANK " + GaCombat.PlayerRank().ToString(), _hud);
-            if (g != null)
-            {
-                GUI.color = new Color(1f, 0.82f, 0.28f, 0.95f);
-                GUI.Label(new Rect(tx, barY + 22f, 360f, 18f),
-                    "CAL  " + GaCatalog.CalLabel(g)
-                        + "   " + GaCatalog.FireName(g.Fire, false)
-                        + "   " + Mathf.RoundToInt(g.Rpm).ToString() + "rpm"
-                        + "   " + Mathf.RoundToInt(GaCombat.BulletSpeed(g)).ToString() + "m/s",
-                    _hudTiny);
-                GUI.color = Color.white;
-                DrawMagRow(tx, barY + 42f, g);
-            }
-            GUI.Label(new Rect(tx, barY + 72f, 360f, 16f), HintLine(g), _tiny);
+            GUI.Label(new Rect(tx, barY + 6f, 290f, 22f),
+                "[" + (GaCombat.Slot + 1).ToString() + " " + GaClass.SlotName(GaCombat.Slot) + "]  " + n, _hud);
+            GUI.Label(new Rect(tx, barY + 28f, 290f, 18f), KitHint(), _hudTiny);
+            GUI.Label(new Rect(tx, barY + 48f, 280f, 16f), BoardHint(), _tiny);
             GUI.color = prev;
+        }
+
+        private static string KitHint()
+        {
+            string radio = GaRadio.Tip();
+            if (!string.IsNullOrEmpty(radio))
+                return radio;
+            return GaForce.Label() + "  " + GaClass.Name()
+                + (GaClass.Picked == GaKitId.SpecOps ? "  JET" : "")
+                + (GaClass.Picked == GaKitId.Tsf ? "  TSF" : "")
+                + "  PLATE " + GaMode.OuterArmor.ToString()
+                + "  " + GaFps.StanceLabel();
+        }
+
+        private static string BoardHint()
+        {
+            Aircraft claimed = GaMode.ParkedAircraft;
+            if (claimed != null)
+            {
+                try
+                {
+                    if (!claimed.disabled)
+                        return "T  board marked jet (12m)";
+                }
+                catch { }
+            }
+            if (GaForce.Kind == GaForceKind.Land)
+                return "T  board vehicle   H  buy vehicle   V  radio";
+            return "T  board   H  vehicle   B  aircraft   L  3rd";
         }
 
         private static void DrawMagRow(float x, float y, GaGun g)
@@ -475,12 +738,48 @@ namespace GroundArsenal
 
         private static void DrawLootHint()
         {
-            if (string.IsNullOrEmpty(GaLoot.Hint))
+            if (GaMode.Downed || GaChute.Falling)
+                return;
+            string msg = GaSupport.Hint();
+            if (string.IsNullOrEmpty(msg))
+                msg = GaSupply.Hint();
+            if (string.IsNullOrEmpty(msg) && !GaTsf.Owns())
+                msg = GaFps.Hint();
+            if (string.IsNullOrEmpty(msg))
+                msg = GaRide.Hint();
+            if (string.IsNullOrEmpty(msg))
+                msg = GaLoot.Hint;
+            if (string.IsNullOrEmpty(msg))
                 return;
             Color prev = GUI.color;
             GUI.color = new Color(1f, 0.7f, 0.2f, 0.92f);
-            GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.62f, 440f, 22f),
-                GaLoot.Hint, _title);
+            GUI.Label(new Rect(Screen.width * 0.5f - 220f, Screen.height * 0.52f, 440f, 22f),
+                msg, _title);
+            GUI.color = prev;
+        }
+
+        private static void DrawChutePrompt()
+        {
+            if (!GaChute.Falling)
+                return;
+            string action = GaChute.PromptAction();
+            string agl = GaChute.PromptAgl();
+            if (string.IsNullOrEmpty(action))
+                return;
+            float w = 420f;
+            float h = 58f;
+            float x = Screen.width * 0.5f - w * 0.5f;
+            float y = Screen.height * 0.18f;
+            Color prev = GUI.color;
+            GUI.color = new Color(0.02f, 0.03f, 0.04f, 0.78f);
+            GUI.DrawTexture(new Rect(x, y, w, h), _px);
+            Color ink = GaChute.Open
+                ? new Color(0.45f, 0.95f, 0.55f, 1f)
+                : new Color(1f, 0.78f, 0.22f, 1f);
+            GUI.color = ink;
+            GUI.Label(new Rect(x, y + 4f, w, 26f), action, _chute);
+            GUI.color = new Color(0.92f, 0.94f, 0.9f, 0.95f);
+            GUI.Label(new Rect(x, y + 28f, w, 24f), agl, _chute);
             GUI.color = prev;
         }
 
@@ -495,7 +794,7 @@ namespace GroundArsenal
                     return;
             }
             catch { }
-            Camera cam = Camera.main;
+            Camera cam = GaPerfFrameGate.Cam();
             if (cam == null)
                 return;
             Vector3 pos = ac.transform.position + Vector3.up * 3.2f;
@@ -515,11 +814,10 @@ namespace GroundArsenal
             catch { n = ac.name; }
             string line = n + "  " + Mathf.RoundToInt(dist).ToString() + "m";
             if (dist <= (GaMode.AirHop ? 48f : 12f))
-                line = line + "  U BOARD";
+                line = line + "  T BOARD";
             Color prev = GUI.color;
-            GUI.color = new Color(0.2f, 0.95f, 1f, 0.95f);
-            GUI.DrawTexture(new Rect(sp.x - 7f, y - 7f, 14f, 14f), _px);
-            GUI.color = Color.white;
+            GaFxUi.Corners(sp.x, y, 22f, new Color(0.25f, 0.9f, 1f, 0.95f));
+            GUI.color = new Color(0.75f, 0.95f, 1f, 0.95f);
             GUI.Label(new Rect(sp.x - 110f, y - 28f, 220f, 20f), line, _hudTiny);
             GUI.color = prev;
         }
@@ -527,10 +825,10 @@ namespace GroundArsenal
         private static string HintLine(GaGun g)
         {
             if (g != null && GaCombat.IsRbs(g))
-                return "RMB lock air   LMB fire   G arsenal";
+                return "RMB lock air   LMB fire   G drop   U supply";
             if (g != null && GaCombat.IsRpg(g))
-                return "RMB lock ground   LMB fire   G arsenal";
-            return "G arsenal   U board   RMB ads   SHIFT sprint";
+                return "RMB lock ground   LMB fire   G drop   U supply";
+            return "G drop   U supply drop   T board   B aircraft   V radio   Q spot   C crouch";
         }
 
         private static void DrawSkillRings()
@@ -749,7 +1047,7 @@ namespace GroundArsenal
                 + "  standalone"
                 + (GaOritasy.HasModularArmor ? "  Oritasy-AP" : "  GA-AP");
             GUI.color = new Color(0.55f, 1f, 0.75f, 0.85f);
-            GUI.Label(new Rect(18f, Screen.height - 178f, 720f, 18f), line, _hudTiny);
+            GUI.Label(new Rect(Screen.width * 0.5f + 230f, 12f, 280f, 18f), line, _hudTiny);
             GUI.color = Color.white;
         }
 
@@ -782,8 +1080,8 @@ namespace GroundArsenal
                     _filterFam = f;
             }
             GUILayout.EndHorizontal();
-            GUILayout.Label("Click a picture to put that modeled gun on hotbar slot "
-                + (GaCombat.Slot + 1).ToString(), _small);
+            GUILayout.Label("1 PRIMARY  2 SECONDARY  3 PISTOL  4 CLASS  — slot "
+                + (GaCombat.Slot + 1).ToString() + " " + GaClass.SlotName(GaCombat.Slot), _small);
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(420f));
             for (int i = 0; i < GaCatalog.Count; i++)
             {
@@ -805,11 +1103,11 @@ namespace GroundArsenal
                     + "  " + GaCatalog.FireName(g.Fire, false)
                     + "  MAG " + g.Mag.ToString()
                     + (GaCombat.Unlocked(g) ? "" : ("  LOCK RANK " + g.Rank.ToString()));
-                if (GUI.Button(new Rect(row.x + 100f, row.y, row.width - 100f, 50f),
+                    if (GUI.Button(new Rect(row.x + 100f, row.y, row.width - 100f, 50f),
                     label, on ? _btnOn : _btn))
                 {
-                    if (!GaCombat.Unlocked(g))
-                        FlashHit("RANK " + g.Rank.ToString() + " REQUIRED");
+                    if (!InClassPool(g.Id, GaCombat.Slot))
+                        FlashHit(GaCombat.Slot == 3 ? "CLASS WEAPON LOCKED" : "NOT THIS SLOT");
                     else
                     {
                         GaCombat.Hotbar[GaCombat.Slot] = g.Id;
@@ -821,6 +1119,19 @@ namespace GroundArsenal
             }
             GUILayout.EndScrollView();
             GUI.DragWindow(new Rect(0f, 0f, 10000f, 22f));
+        }
+
+        private static bool InClassPool(int id, int slot)
+        {
+            int[] pool = GaClass.SlotPool(GaClass.Picked, slot);
+            if (pool == null)
+                return false;
+            for (int i = 0; i < pool.Length; i++)
+            {
+                if (pool[i] == id)
+                    return true;
+            }
+            return false;
         }
 
         private static void Ensure()
@@ -862,12 +1173,41 @@ namespace GroundArsenal
             _title.fontSize = 16;
             _title.fontStyle = FontStyle.Bold;
             _title.alignment = TextAnchor.MiddleCenter;
-            _title.normal.textColor = new Color(0.75f, 1f, 0.8f);
+            _title.normal.textColor = new Color(0.92f, 0.95f, 0.88f);
             _offline = new GUIStyle(GUI.skin.label);
-            _offline.fontSize = 28;
+            _offline.fontSize = 42;
             _offline.fontStyle = FontStyle.Bold;
             _offline.alignment = TextAnchor.MiddleCenter;
+            _offline.wordWrap = false;
+            _offline.clipping = TextClipping.Overflow;
             _offline.normal.textColor = new Color(0.95f, 0.22f, 0.16f);
+            _chute = new GUIStyle(GUI.skin.label);
+            _chute.fontSize = 20;
+            _chute.fontStyle = FontStyle.Bold;
+            _chute.alignment = TextAnchor.MiddleCenter;
+            _chute.wordWrap = false;
+            _chute.clipping = TextClipping.Overflow;
+            _chute.normal.textColor = new Color(0.95f, 0.95f, 0.9f);
+            _ammo = new GUIStyle(GUI.skin.label);
+            _ammo.fontSize = 34;
+            _ammo.fontStyle = FontStyle.Bold;
+            _ammo.alignment = TextAnchor.UpperRight;
+            _ammo.clipping = TextClipping.Overflow;
+            _ammo.wordWrap = false;
+            _ammo.normal.textColor = new Color(0.95f, 0.97f, 0.92f);
+            _hpNum = new GUIStyle(GUI.skin.label);
+            _hpNum.fontSize = 28;
+            _hpNum.fontStyle = FontStyle.Bold;
+            _hpNum.alignment = TextAnchor.MiddleLeft;
+            _hpNum.clipping = TextClipping.Overflow;
+            _hpNum.wordWrap = false;
+            _hpNum.normal.textColor = new Color(0.95f, 0.97f, 0.92f);
+            _center = new GUIStyle(GUI.skin.label);
+            _center.fontSize = 16;
+            _center.fontStyle = FontStyle.Bold;
+            _center.alignment = TextAnchor.MiddleCenter;
+            _center.wordWrap = false;
+            _center.normal.textColor = new Color(0.92f, 0.95f, 0.9f);
             _btn = new GUIStyle(GUI.skin.button);
             _btn.fontSize = 12;
             _btn.alignment = TextAnchor.MiddleLeft;

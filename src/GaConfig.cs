@@ -14,9 +14,9 @@ namespace GroundArsenal
             if (config == null)
                 return;
             Enabled = config.Bind("Infantry", "Enabled", true,
-                "Standalone FPS infantry. Off = no hangar deploy, no hop-out, no overlays.");
+                "Standalone FPS infantry. Off = no hangar / carrier / cargo deploy.");
             PauseOritasy = config.Bind("Infantry", "PauseOritasyFps", true,
-                "If Oritasy is installed, pause its infantry Tick/Draw so only this plugin runs FPS.");
+                "Pause Oritasy infantry Tick/Draw so only Ground Arsenal runs FPS.");
             ShowTracers = config.Bind("Combat", "ShowTracers", true,
                 "Shot streaks. Slug trails always draw; this keeps extra flash lines.");
             ShowPerf = config.Bind("Debug", "ShowPerf", true,

@@ -7,6 +7,7 @@ namespace GroundArsenal
     internal static class GaFx
     {
         internal static int Live;
+        private static float _nextBurstAt;
         private static Material _unlit;
         private static Material _add;
         private static bool _tried;
@@ -85,31 +86,31 @@ namespace GroundArsenal
 
         internal static void Spark(Vector3 p, Vector3 n, Color c)
         {
+            if (GaPerfFrameGate.SkipPolish() || Live > 10)
+                return;
             Vector3 nn = n.sqrMagnitude > 0.01f ? n.normalized : Vector3.up;
             Vector3 at = p + nn * 0.045f;
-            SpawnFlash(at, 0.28f, new Color(1f, 0.72f, 0.16f, 1f), 0.08f);
-            SpawnFlash(at, 0.11f, new Color(1f, 0.98f, 0.82f, 1f), 0.05f);
-            int nBits = 14;
+            SpawnFlash(at, 0.22f, new Color(1f, 0.72f, 0.16f, 1f), 0.07f);
+            int nBits = 3;
             for (int i = 0; i < nBits; i++)
             {
                 Vector3 dir = (nn * 0.55f + UnityEngine.Random.insideUnitSphere).normalized;
-                SpawnBit(at, dir * UnityEngine.Random.Range(6f, 16f),
-                    UnityEngine.Random.Range(0.035f, 0.07f),
+                SpawnBit(at, dir * UnityEngine.Random.Range(6f, 14f),
+                    UnityEngine.Random.Range(0.03f, 0.055f),
                     UnityEngine.Random.value > 0.4f
                         ? new Color(1f, 0.62f, 0.12f)
                         : new Color(1f, 0.95f, 0.55f),
-                    UnityEngine.Random.Range(0.18f, 0.38f));
+                    UnityEngine.Random.Range(0.12f, 0.24f));
             }
-            BurstParticles(at, nn);
         }
 
         internal static void DressSlug(GameObject go, Color color, float length, bool bright)
         {
             if (go == null)
                 return;
-            if (length < 0.7f)
-                length = 0.7f;
-            if (bright && length < 4.2f)
+            if (length < 0.22f)
+                length = 0.22f;
+            if (bright && length >= 1.4f && length < 4.2f)
                 length = 4.2f;
             LineRenderer lr = go.AddComponent<LineRenderer>();
             lr.useWorldSpace = false;
@@ -145,15 +146,14 @@ namespace GroundArsenal
                 tr.material = add;
             tr.startColor = color;
             tr.endColor = new Color(color.r, color.g * 0.35f, 0.05f, 0f);
+            if (!bright) return;
             GameObject tip = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             tip.name = "Tip";
             tip.layer = 0;
             tip.transform.SetParent(go.transform, false);
             tip.transform.localPosition = Vector3.zero;
             tip.transform.localScale = Vector3.one * (bright ? 0.06f : 0.032f);
-            Collider col = tip.GetComponent<Collider>();
-            if (col != null)
-                UnityEngine.Object.Destroy(col);
+            GaPhys.Strip(tip);
             Renderer r = tip.GetComponent<Renderer>();
             Material tm = Tint(color);
             if (r != null && tm != null)
@@ -188,7 +188,7 @@ namespace GroundArsenal
             FlameLine(pos, pos + fwd * (0.24f * scale), 0.072f * scale, 0.012f * scale,
                 new Color(1f, 0.55f, 0.10f, 1f), life * 0.85f);
             float spin = UnityEngine.Random.Range(0f, 60f);
-            int petals = wide ? 7 : 5;
+            int petals = (Live > 16) ? (wide ? 3 : 2) : (wide ? 7 : 5);
             for (int i = 0; i < petals; i++)
             {
                 float ang = (spin + i * (360f / petals)) * Mathf.Deg2Rad;
@@ -207,7 +207,7 @@ namespace GroundArsenal
         internal static void Muzzle(Vector3 pos)
         {
             Vector3 fwd = Vector3.forward;
-            Camera cam = Camera.main;
+            Camera cam = GaPerfFrameGate.Cam();
             if (cam != null)
                 fwd = cam.transform.forward;
             Muzzle(pos, fwd, 1f, false);
@@ -217,7 +217,8 @@ namespace GroundArsenal
         {
             SpawnFlash(pos, 0.55f, new Color(1f, 0.45f, 0.12f, 1f), 0.12f);
             SpawnFlash(pos, 0.22f, new Color(1f, 0.85f, 0.4f, 1f), 0.08f);
-            for (int i = 0; i < 22; i++)
+            int bits = GaPerfFrameGate.SkipPolish() ? 2 : 6;
+            for (int i = 0; i < bits; i++)
             {
                 SpawnBit(pos, UnityEngine.Random.onUnitSphere * UnityEngine.Random.Range(6f, 18f),
                     UnityEngine.Random.Range(0.02f, 0.045f),
@@ -278,9 +279,7 @@ namespace GroundArsenal
             go.layer = 0;
             go.transform.position = pos;
             go.transform.localScale = Vector3.one * size;
-            Collider col = go.GetComponent<Collider>();
-            if (col != null)
-                UnityEngine.Object.Destroy(col);
+            GaPhys.Strip(go);
             Renderer r = go.GetComponent<Renderer>();
             Material m = Tint(color);
             if (r != null && m != null)
@@ -294,6 +293,8 @@ namespace GroundArsenal
 
         private static void BurstParticles(Vector3 pos, Vector3 n)
         {
+            if (Time.unscaledTime < _nextBurstAt || Live > 24) return;
+            _nextBurstAt = Time.unscaledTime + 0.05f;
             try
             {
                 GameObject go = new GameObject("GaHitBurst");
@@ -477,9 +478,7 @@ namespace GroundArsenal
             go.transform.position = pos;
             go.transform.localScale = Vector3.one * size;
             go.transform.rotation = UnityEngine.Random.rotation;
-            Collider col = go.GetComponent<Collider>();
-            if (col != null)
-                UnityEngine.Object.Destroy(col);
+            GaPhys.Strip(go);
             Renderer r = go.GetComponent<Renderer>();
             Material m = Tint(color);
             if (r != null && m != null)

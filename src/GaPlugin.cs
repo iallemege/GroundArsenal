@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using BepInEx;
 using HarmonyLib;
 using UnityEngine;
@@ -10,12 +11,12 @@ namespace GroundArsenal
     {
         internal const string GUID = "com.iallemege.groundarsenal";
         internal const string Name = "Ground Arsenal";
-        internal const string Version = "1.2.13";
+        internal const string Version = "1.0.0";
     }
 
+    [DefaultExecutionOrder(-2000)]
     [BepInPlugin(GaInfo.GUID, GaInfo.Name, GaInfo.Version)]
     [BepInDependency("bia.runtime")]
-    [BepInDependency("com.iallemege.oritasy", BepInDependency.DependencyFlags.SoftDependency)]
     public class GaPlugin : BaseUnityPlugin
     {
         internal static GaPlugin Instance;
@@ -27,6 +28,8 @@ namespace GroundArsenal
             Instance = this;
             Log = Logger;
             GaConfig.Bind(Config);
+            GaDeploy.Load();
+            GaForeignGuard.DisableOthers(Logger);
             _harmony = new Harmony(GaInfo.GUID);
             _harmony.PatchAll();
             GaOritasy.Detect();
@@ -38,7 +41,7 @@ namespace GroundArsenal
             try { SceneManager.sceneLoaded += OnScene; }
             catch { }
             Logger.LogInfo(GaInfo.Name + " " + GaInfo.Version
-                + " — standalone infantry "
+                + " — infantry (requires BIA Runtime) "
                 + (GaConfig.IsEnabled() ? "ON" : "OFF")
                 + ", " + GaCatalog.Count + " modeled guns");
         }
@@ -52,16 +55,30 @@ namespace GroundArsenal
             }
         }
 
+        [SkipLocalsInit]
         private void Update()
         {
+            GaPerfFrameGate.BeginFrame();
+            GaVtol.Tick();
+            GaControllerPointer.Tick();
+            GaNet.Tick();
             GaMode.Tick();
         }
 
+        [SkipLocalsInit]
         private void OnGUI()
         {
+            GaPerfFrameGate.BeginFrame();
             try
             {
                 if (GaMode.IsMenuScene())
+                    return;
+                Event e = Event.current;
+                EventType t = e != null ? e.type : EventType.Repaint;
+                bool menu = GaHud.BlocksLook || GaDeploy.Open
+                    || GaHangar.HangarSelectOpen() || GaHangar.MenuOpen
+                    || GaHangar.DeathPick || GaHangar.FieldOpen;
+                if (!menu && t != EventType.Repaint)
                     return;
                 GaMode.Draw();
             }
@@ -84,5 +101,13 @@ namespace GroundArsenal
             if (GaMode.IsMenuSceneName(scene.name))
                 GaMode.Shutdown();
         }
+    }
+}
+
+namespace System.Runtime.CompilerServices
+{
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, Inherited = false)]
+    public sealed class SkipLocalsInitAttribute : Attribute
+    {
     }
 }

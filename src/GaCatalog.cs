@@ -31,9 +31,9 @@ namespace GroundArsenal
 
     internal static class GaCatalog
     {
-        internal const int Count = 49;
+        internal const int Count = 51;
         internal const int FamilyCount = 16;
-        internal const int HotbarSize = 9;
+        internal const int HotbarSize = 4;
         internal const int CalCount = 12;
 
         // CalEn must be initialized before All = Build(); static fields run in order.
@@ -208,6 +208,8 @@ namespace GroundArsenal
             a[46] = G(46, "Kpist 6F", "Kpist 6F", 3, 1, 30, 120, 680f, 0.012f, 18f, 4f, 200f, "weaponIcon_q_SubmachineGun_5.png", "KE", "q_SubmachineGun_5.obj");
             a[47] = G(47, "Rb 8", "Rb 8", 14, 4, 1, 4, 18f, 0.004f, 62f, 16f, 9000f, "weaponIcon_rbs70.png", "HE", "rbs70.obj");
             a[48] = G(48, "Revolver 3F", "Revolver 3F", 0, 0, 6, 36, 85f, 0.012f, 36f, 3f, 95f, "weaponIcon_rev_body.png", "KE", "rev_body.obj");
+            a[49] = G(49, "WS-16C", "WS-16C突击炮", 11, 1, 36, 1200, 420f, 0.0035f, 62f, 18f, 12000f, "", "KE", "ws16.obj");
+            a[50] = G(50, "Type-77", "77式近战刀", 12, 1, 0, 0, 220f, 0.002f, 110f, 22f, 16f, "", "HEAT", "type77.obj");
             return a;
         }
 
@@ -302,6 +304,10 @@ namespace GroundArsenal
                 cal = 9;
             else if (x.Family == 15)
                 cal = 10;
+            if (x.Id == 49)
+                cal = 5;
+            else if (x.Id == 50)
+                cal = 8;
             if (cal < 0 || cal >= CalCount)
                 cal = 2;
             x.CalId = cal;
@@ -336,6 +342,8 @@ namespace GroundArsenal
                 r = 3;
             else if (x.Family == 14)
                 r = 4;
+            if (x.Id == 49 || x.Id == 50)
+                r = 0;
             x.Rank = r;
         }
 
@@ -450,6 +458,16 @@ namespace GroundArsenal
             {
                 vel = 280f;
                 drop = 1.48f;
+            }
+            else if (x.Id == 49)
+            {
+                vel = 1180f;
+                drop = 0.06f;
+            }
+            else if (x.Id == 50)
+            {
+                vel = 70f;
+                drop = 2.2f;
             }
             x.Vel = vel;
             x.Drop = drop;

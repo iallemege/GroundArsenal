@@ -1,19 +1,30 @@
 # Ground Arsenal
 
-Standalone **Nuclear Option** BepInEx plugin: local first-person infantry. No compile-time dependency on Oritasy.
+First-person infantry for **Nuclear Option** (BepInEx). **1.0 is the first stable release**; earlier GitHub tags were test builds.
 
-Requires **BIA** (`BIA.Runtime_*.dll`, GUID `bia.runtime`). If Oritasy is also installed, this plugin pauses Oritasy infantry via reflection so the two FPS modes do not double-run.
+Requires **[BIA Runtime](https://github.com/iallemege/BIA)** (`bia.runtime`). The 1.0 zip already includes `BIA.Runtime_1.0.25.dll`.
 
-Version **1.2.13**.
+## Install
+
+Unzip into `BepInEx/plugins/` so you have:
+
+- `plugins/GroundArsenal.dll`
+- `plugins/GroundArsenal/` (meshes, liveries, icons, `kits.txt`)
+- `plugins/BIA.Runtime_1.0.25.dll` (skip if you already have a current BIA Runtime)
+
+Do not nest a `BepInEx/` folder inside the zip extract.
 
 ## Play
 
-- Overlay only while hangar **aircraft-select** is open (not cockpit, map, or faction join). Panel sits on the **left**. **1–9** pick hotbar slot, then **Deploy Infantry**. Guns unlock with your mission **rank**.
-- Buy a jet while on foot: aircraft HUD stays off until you walk up and press **U** to board.
-- Field: **G** arsenal (filter by family). Click a gun to put it on the current hotbar slot.
-- **1–9** / mouse wheel: hotbar. **LMB** fire, **RMB** ads (lock on launchers), **R** reload, **U** hop out / board.
-- Hangar deploy uses the full hotbar. Hop-out and parachute landing use slot 1 only.
-- Approach wrecks to pick up matching ammunition.
+Hangar **aircraft-select**: left overlay, **Infantry** chip. Pick kit / AIR lift / spawn field, then **DEPLOY**.
+
+- **T** board / leave vehicles and cargo aircraft
+- **WASD** drive (driver seat). **F1–F4** seats
+- AIR: **LIFT** tab picks the insert aircraft at **half airframe cost**, or paradrop for free
+- **H** buy a ground vehicle, **B** buy aircraft (AIR / SEA)
+- **LMB** fire, **RMB** ads, **R** reload
+
+If Oritasy is also installed, Ground Arsenal pauses Oritasy infantry so the two FPS modes do not double-run.
 
 ## Build
 
@@ -24,21 +35,6 @@ build.bat
 ```
 
 Copies `GroundArsenal.dll` and `assets/Weapons/*` into `BepInEx/plugins/`.
-
-Fully quit Steam after installing.
-
-## Assets
-
-Viewmodels are downloaded CC0 meshes (loafbrr / Quaternius / byzmod3d) plus AT-4, RBS 70, and G11.
-
-```
-python tools/fetch_cc0_hd.py
-F:\blender\blender.exe -b --python ..\..\Blender\scripts\export_loafbrr_parts.py
-python tools/gen_kits.py
-build.bat
-```
-
-Fully quit Steam after installing.
 
 ## License
 

@@ -46,5 +46,19 @@ namespace GroundArsenal
                 return false;
             }
         }
+
+        internal static void Give(float amountM)
+        {
+            if (amountM <= 0.001f)
+                return;
+            NuclearOption.Networking.Player player = null;
+            try
+            {
+                if (!GameManager.GetLocalPlayer(out player) || player == null)
+                    return;
+                player.AddAllocation(amountM);
+            }
+            catch { }
+        }
     }
 }

@@ -1,7 +1,6 @@
 *.dll
 *.pdb
 *.mdb
-*.exe
 obj/
 bin/
 .vs/

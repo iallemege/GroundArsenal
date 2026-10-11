@@ -7,7 +7,7 @@ namespace GroundArsenal
 {
     /// <summary>
     /// Optional coexistence with Oritasy. No compile reference — reflection only.
-    /// Stops Oritasy infantry Tick/Draw so this plugin owns FPS.
+    /// Always pauses Oritasy infantry Tick/Draw so Ground Arsenal owns FPS.
     /// </summary>
     internal static class GaOritasy
     {

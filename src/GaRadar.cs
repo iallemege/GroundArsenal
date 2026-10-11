@@ -23,12 +23,14 @@ namespace GroundArsenal
 
         internal static Rect ScreenRect()
         {
-            float size = 176f;
-            return new Rect(Screen.width - size - 16f, Screen.height - size - 96f, size, size);
+            float size = 168f;
+            return new Rect(Screen.width - size - 16f, 42f, size, size);
         }
 
         internal static void Draw()
         {
+            if (!GaPerfFrameGate.Paint())
+                return;
             if (!GaMode.Active || GaMode.Dead)
                 return;
             if (GaOritasy.EmpStunned())
@@ -48,18 +50,18 @@ namespace GroundArsenal
             GUI.color = new Color(0.02f, 0.08f, 0.09f, 0.78f);
             GUI.DrawTexture(new Rect(x, y, size, size), _px);
             GUI.color = new Color(0.2f, 0.9f, 0.78f, 0.32f);
-            DrawRing(c, r, 48);
-            DrawRing(c, r * 0.66f, 32);
-            DrawRing(c, r * 0.33f, 24);
+            DrawRing(c, r, 10);
+            DrawRing(c, r * 0.66f, 7);
+            DrawRing(c, r * 0.33f, 5);
 
             float yaw = GaMode.LookYaw;
             Vector3 origin = GaMode.EyePos;
-            FactionHQ localHq = LocalHq();
+            FactionHQ localHq = GaPerfFrameGate.Hq();
             Unit linked = GaMode.LinkedUnit();
 
             try
             {
-                List<Unit> all = UnitRegistry.allUnits;
+                List<Unit> all = GaPerfFrameGate.PlotUnits();
                 if (all != null)
                 {
                     for (int i = 0; i < all.Count; i++)
@@ -77,9 +79,10 @@ namespace GroundArsenal
                         }
                         Vector3 dp = u.transform.position - origin;
                         dp.y = 0f;
-                        float dist = dp.magnitude;
-                        if (dist > RangeM || dist < 2f)
+                        float d2 = dp.sqrMagnitude;
+                        if (d2 > 36000000f || d2 < 4f)
                             continue;
+                        float dist = Mathf.Sqrt(d2);
                         float bearing = Mathf.Atan2(dp.x, dp.z) * Mathf.Rad2Deg - yaw;
                         float rn = dist / RangeM;
                         Vector2 p = Polar(c, r, bearing, rn);
@@ -199,8 +202,8 @@ namespace GroundArsenal
             if (len < 1f)
                 return;
             int n = Mathf.CeilToInt(len / 3f);
-            if (n > 48)
-                n = 48;
+            if (n > 16)
+                n = 16;
             for (int i = 0; i <= n; i++)
             {
                 float t = i / (float)n;

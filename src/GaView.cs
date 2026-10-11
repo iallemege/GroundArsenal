@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -61,6 +63,8 @@ namespace GroundArsenal
         private static float _kickUntil;
         private static float _bodyScale = 1f;
         private static Quaternion _aimRot = Quaternion.Euler(0f, 180f, 0f);
+        private static Camera _boundCam;
+        private static bool _holdHidden;
 
         internal static void Attach(Transform eye)
         {
@@ -74,9 +78,12 @@ namespace GroundArsenal
             _root.transform.localRotation = Quaternion.identity;
             _hold = new GameObject("GaHold");
             _hold.transform.SetParent(_root.transform, false);
-            Camera cam = Camera.main;
-            if (cam != null)
+            Camera cam = GaPerfFrameGate.Cam();
+            if (cam != null && !object.ReferenceEquals(cam, _boundCam))
+            {
+                _boundCam = cam;
                 BindToCamera(cam);
+            }
             Show(true);
         }
 
@@ -162,20 +169,33 @@ namespace GroundArsenal
             _kickUntil = Time.time + _kickDur;
         }
 
+        [SkipLocalsInit]
         internal static void Tick()
         {
             if (_hold == null)
                 return;
-            Camera cam = Camera.main;
-            if (cam != null)
+            if (GaRide.Busy || GaTsf.Owns())
+            {
+                if (_hold.activeSelf)
+                    _hold.SetActive(false);
+                return;
+            }
+            Camera cam = GaPerfFrameGate.Cam();
+            if (cam != null && !object.ReferenceEquals(cam, _boundCam))
+            {
+                _boundCam = cam;
                 BindToCamera(cam);
+            }
             Show(false);
-            bool hide = GaCombat.Ads > 0.42f;
-            _hold.SetActive(!hide);
+            bool hide = GaCombat.Ads > 0.12f;
+            if (hide != _holdHidden)
+            {
+                _holdHidden = hide;
+                _hold.SetActive(!hide);
+            }
             if (_root != null)
             {
-                Vector3 adsOff = Vector3.Lerp(Vector3.zero, new Vector3(-0.18f, 0.06f, -0.08f), GaCombat.Ads);
-                _root.transform.localPosition = adsOff;
+                _root.transform.localPosition = Vector3.zero;
                 _root.transform.localRotation = Quaternion.identity;
             }
             float kick = 0f;
@@ -390,6 +410,16 @@ namespace GroundArsenal
 
         private static void Show(bool force)
         {
+            if (GaCombat.HeldId < 0)
+            {
+                ClearParts();
+                _shown = -1;
+                if (_hold != null)
+                    _hold.SetActive(false);
+                return;
+            }
+            if (_hold != null && !_hold.activeSelf)
+                _hold.SetActive(true);
             GaGun g = GaCombat.Current;
             int id = g != null ? g.Id : 0;
             if (!force && id == _shown && _body != null)
@@ -406,7 +436,7 @@ namespace GroundArsenal
             if (bodyMesh == null)
                 bodyMesh = LoadMesh("fam_" + fam.ToString("00") + ".obj");
             _aimRot = AimFromMesh(bodyMesh);
-            Material mat = MatFor(kit);
+            Material mat = MatFor(kit, true);
             _body = MakePart("Body", bodyMesh, mat);
             bool cubeBody = false;
             if (_body == null)
@@ -417,8 +447,9 @@ namespace GroundArsenal
             _bodyScale = Fit(bodyMesh, FamLen[fam]);
             if (_body != null && !cubeBody)
                 _body.transform.localScale = Vector3.one * _bodyScale;
+            Material partMat = MatFor(kit, false);
             Mesh magMesh = LoadMesh(kit != null ? kit.Mag : null);
-            _mag = MakePart("Mag", magMesh, mat);
+            _mag = MakePart("Mag", magMesh, partMat);
             if (_mag != null)
             {
                 bool native = kit != null && kit.Body != null
@@ -430,9 +461,10 @@ namespace GroundArsenal
                     _mag.transform.localScale = Vector3.one * Fit(magMesh, FamLen[fam] * 0.20f);
                     _mag.transform.localPosition = new Vector3(0f, -0.035f, -0.02f);
                 }
+                _mag.transform.localRotation = HangDown(magMesh);
             }
             Mesh slideMesh = LoadMesh(kit != null ? kit.Slide : null);
-            _slide = MakePart("Slide", slideMesh, mat);
+            _slide = MakePart("Slide", slideMesh, partMat);
             if (_slide != null)
             {
                 if (kit != null && kit.Rig >= 1 && kit.Rig <= 2
@@ -443,7 +475,7 @@ namespace GroundArsenal
                     _slide.transform.localScale = Vector3.one * Fit(slideMesh, FamLen[fam] * 0.18f);
             }
             Mesh accMesh = LoadMesh(kit != null ? kit.Acc : null);
-            _acc = MakePart("Acc", accMesh, mat);
+            _acc = MakePart("Acc", accMesh, partMat);
             if (_acc != null)
                 _acc.transform.localScale = Vector3.one * Fit(accMesh, FamLen[fam] * 0.28f);
             _rig = kit != null ? kit.Rig : 0;
@@ -523,6 +555,140 @@ namespace GroundArsenal
             go = null;
         }
 
+        internal static GameObject CreateWorldRifle(GaGun g)
+        {
+            if (g == null)
+                return null;
+            EnsureMats();
+            int fam = g.Family;
+            if (fam < 0 || fam >= FamLen.Length)
+                fam = 0;
+            GaKit kit = GaKits.Get(g.Id);
+            Mesh bodyMesh = LoadMesh(kit != null ? kit.Body : null);
+            if (bodyMesh == null)
+                bodyMesh = LoadMesh("fam_" + fam.ToString("00") + ".obj");
+            GameObject root = new GameObject("GaRifleDrop");
+            root.layer = 0;
+            GameObject body = new GameObject("Body");
+            body.layer = 0;
+            body.transform.SetParent(root.transform, false);
+            MeshFilter mf = body.AddComponent<MeshFilter>();
+            MeshRenderer mr = body.AddComponent<MeshRenderer>();
+            mr.shadowCastingMode = ShadowCastingMode.On;
+            mr.receiveShadows = true;
+            if (bodyMesh != null)
+            {
+                mf.sharedMesh = bodyMesh;
+                mr.sharedMaterial = MatFor(kit, true);
+                float scale = Fit(bodyMesh, FamLen[fam]);
+                body.transform.localScale = Vector3.one * scale;
+                body.transform.localRotation = AimFromMesh(bodyMesh);
+            }
+            else
+            {
+                GameObject tmp = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                mf.sharedMesh = tmp.GetComponent<MeshFilter>().sharedMesh;
+                UnityEngine.Object.Destroy(tmp);
+                mr.sharedMaterial = _unlitCol;
+                body.transform.localScale = new Vector3(0.06f, 0.06f, FamLen[fam]);
+            }
+            BoxCollider box = root.AddComponent<BoxCollider>();
+            box.size = new Vector3(0.08f, 0.08f, FamLen[fam]);
+            box.center = new Vector3(0f, 0f, FamLen[fam] * 0.15f);
+            try { box.excludeLayers = 0; }
+            catch { }
+            return root;
+        }
+
+        internal static GameObject CreateHeldRifle(GaGun g)
+        {
+            GameObject go = CreateWorldRifle(g);
+            if (go == null)
+                return null;
+            go.name = "GaHeldGun";
+            Collider[] cols = go.GetComponentsInChildren<Collider>(true);
+            if (cols != null)
+            {
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    if (cols[i] != null)
+                        UnityEngine.Object.Destroy(cols[i]);
+                }
+            }
+            Transform body = go.transform.Find("Body");
+            if (body != null)
+            {
+                MeshFilter mf = body.GetComponent<MeshFilter>();
+                if (mf != null && mf.sharedMesh != null)
+                {
+                    float s = Fit(mf.sharedMesh, 0.50f);
+                    body.localScale = Vector3.one * s;
+                }
+            }
+            go.transform.localScale = Vector3.one;
+            ClampHeld(go, 0.50f);
+            return go;
+        }
+
+        internal static GameObject CreateSquadRifle(GaGun g)
+        {
+            GameObject go = CreateWorldRifle(g);
+            if (go == null)
+                return null;
+            go.name = "GaHeldGun";
+            Collider[] cols = go.GetComponentsInChildren<Collider>(true);
+            if (cols != null)
+            {
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    if (cols[i] != null)
+                        UnityEngine.Object.Destroy(cols[i]);
+                }
+            }
+            Transform body = go.transform.Find("Body");
+            if (body != null)
+            {
+                MeshFilter mf = body.GetComponent<MeshFilter>();
+                if (mf != null && mf.sharedMesh != null)
+                {
+                    float s = Fit(mf.sharedMesh, 0.78f);
+                    body.localScale = Vector3.one * s;
+                }
+            }
+            go.transform.localScale = Vector3.one;
+            ClampHeld(go, 0.82f);
+            return go;
+        }
+
+        private static void ClampHeld(GameObject go, float want)
+        {
+            if (go == null)
+                return;
+            Renderer[] rs = go.GetComponentsInChildren<Renderer>(true);
+            if (rs == null || rs.Length == 0)
+                return;
+            bool have = false;
+            Bounds b = new Bounds(go.transform.position, Vector3.zero);
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null || !rs[i].enabled)
+                    continue;
+                if (!have)
+                {
+                    b = rs[i].bounds;
+                    have = true;
+                }
+                else
+                    b.Encapsulate(rs[i].bounds);
+            }
+            if (!have)
+                return;
+            float longest = Mathf.Max(b.size.x, Mathf.Max(b.size.y, b.size.z));
+            if (longest <= want * 1.08f || longest < 0.02f)
+                return;
+            go.transform.localScale *= want / longest;
+        }
+
         private static GameObject MakePart(string name, Mesh mesh, Material mat)
         {
             if (mesh == null || _hold == null)
@@ -559,15 +725,25 @@ namespace GroundArsenal
             return Quaternion.Euler(0f, 180f, 0f);
         }
 
+        private static Quaternion HangDown(Mesh mesh)
+        {
+            if (mesh == null)
+                return Quaternion.identity;
+            Vector3 sz = mesh.bounds.size;
+            if (sz.y >= sz.x * 0.88f && sz.y >= sz.z * 0.88f)
+                return Quaternion.identity;
+            if (sz.x >= sz.z)
+                return Quaternion.Euler(0f, 0f, -90f);
+            return Quaternion.Euler(-90f, 0f, 0f);
+        }
+
         private static GameObject MakeCube(string name, float wantLen, Material mat)
         {
             if (_hold == null)
                 return null;
             GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.name = name;
-            Collider col = go.GetComponent<Collider>();
-            if (col != null)
-                UnityEngine.Object.Destroy(col);
+            GaPhys.Strip(go);
             Renderer r = go.GetComponent<Renderer>();
             if (r != null)
             {
@@ -611,43 +787,87 @@ namespace GroundArsenal
             return m;
         }
 
-        private static Material MatFor(GaKit kit)
+        private static Material _e53Body;
+        private static Material _e53Part;
+
+        private static Material MatFor(GaKit kit, bool body)
         {
             EnsureMats();
-            if (_unlitCol == null)
-                return null;
-            GaGun g = GaCombat.Current;
-            Color paint = Paint(g);
-            Texture2D t = null;
-            if (g != null)
-                t = LoadTex("livery_" + g.Id.ToString("00") + ".png");
+            Texture2D t = RealTex(kit);
             if (t == null)
-            {
-                string texName = kit != null ? kit.Tex : null;
-                if (string.IsNullOrEmpty(texName) && kit != null && !string.IsNullOrEmpty(kit.Body))
-                    texName = Path.GetFileNameWithoutExtension(kit.Body) + ".png";
-                t = LoadTex(texName);
-            }
-            if (t == null)
-            {
-                Material col = new Material(_unlitCol);
-                col.color = paint;
-                return col;
-            }
+                return E53(body);
+            if (_unlitTex == null)
+                return E53(body);
             Material mat = new Material(_unlitTex);
             mat.mainTexture = t;
-            mat.color = Color.Lerp(Color.white, paint, 0.22f);
+            mat.color = Color.white;
             return mat;
         }
 
-        private static Color Paint(GaGun g)
+        private static Texture2D RealTex(GaKit kit)
         {
-            if (g == null)
-                return new Color(0.35f, 0.35f, 0.36f);
-            float h = (g.Id * 0.6180339f) % 1f;
-            float s = 0.48f + (g.Id % 5) * 0.09f;
-            float v = 0.58f + ((g.Id * 3) % 7) * 0.05f;
-            return Color.HSVToRGB(h, s, v);
+            if (kit == null)
+                return null;
+            if (!string.IsNullOrEmpty(kit.Tex))
+            {
+                Texture2D named = LoadTex(kit.Tex);
+                if (named != null)
+                    return named;
+            }
+            if (string.IsNullOrEmpty(kit.Body))
+                return null;
+            string stem = Path.GetFileNameWithoutExtension(kit.Body);
+            Texture2D direct = LoadTex(stem + ".png");
+            if (direct != null)
+                return direct;
+            if (stem.StartsWith("ak_", StringComparison.Ordinal))
+                return LoadTex("ak.png");
+            if (stem.StartsWith("pistol_", StringComparison.Ordinal))
+                return LoadTex("pistol.png");
+            if (stem.StartsWith("rev_", StringComparison.Ordinal))
+                return LoadTex("rev.png");
+            return null;
+        }
+
+        // E-53B fuselage / wing paints from mat_fuselage and mat_wing.
+        private static Material E53(bool body)
+        {
+            if (body)
+            {
+                if (_e53Body == null)
+                    _e53Body = MakeE53(new Color(0.55f, 0.58f, 0.52f, 1f), 0.5f, "Ga_E53Body");
+                return _e53Body;
+            }
+            if (_e53Part == null)
+                _e53Part = MakeE53(new Color(0.42f, 0.48f, 0.58f, 1f), 0.42f, "Ga_E53Part");
+            return _e53Part;
+        }
+
+        private static Material MakeE53(Color color, float smooth, string matName)
+        {
+            Shader sh = Shader.Find("Universal Render Pipeline/Lit");
+            if (sh == null)
+                sh = Shader.Find("Universal Render Pipeline/Simple Lit");
+            if (sh == null)
+                sh = Shader.Find("Standard");
+            if (sh == null && _unlitCol != null)
+                sh = _unlitCol.shader;
+            if (sh == null)
+                return _unlitCol;
+            Material mat = new Material(sh);
+            mat.name = matName;
+            mat.color = color;
+            if (mat.HasProperty("_BaseColor"))
+                mat.SetColor("_BaseColor", color);
+            if (mat.HasProperty("_Color"))
+                mat.SetColor("_Color", color);
+            if (mat.HasProperty("_Smoothness"))
+                mat.SetFloat("_Smoothness", smooth);
+            if (mat.HasProperty("_Glossiness"))
+                mat.SetFloat("_Glossiness", smooth);
+            if (mat.HasProperty("_Metallic"))
+                mat.SetFloat("_Metallic", 0f);
+            return mat;
         }
 
         private static Texture2D LoadTex(string file)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
@@ -16,18 +17,37 @@ namespace GroundArsenal
         private static readonly FieldInfo JoinMenuField =
             AccessTools.Field(typeof(GameplayUI), "joinMenu");
 
-        private static Rect _win = new Rect(18f, 80f, 508f, 560f);
-        private static GUIStyle _body;
-        private static GUIStyle _btn;
-        private static GUIStyle _btnOn;
+        private static GUIStyle _chipBtn;
         private static bool _styles;
-        private static Vector2 _scroll;
-        private static int _pickSlot;
-        private static bool _docked;
+        /// <summary>Hangar infantry visor. Chip defaults off so aircraft-select clicks work.</summary>
+        private static bool _menuOpen;
+        internal static bool DeathPick;
+        internal static bool FieldOpen;
+        private static int _fieldFrame;
+        private static AircraftSelectionMenu _menu;
+        private static float _menuAt;
+        private static Airbase _ab;
+        private static float _abAt;
 
         /// <summary>
         /// Aircraft-select in a hangar, not the faction join screen and not cockpit/map.
         /// </summary>
+        internal static bool JoinMenuOpen()
+        {
+            try
+            {
+                GameplayUI ui = SceneSingleton<GameplayUI>.i;
+                if (ui != null && JoinMenuField != null)
+                {
+                    GameObject join = JoinMenuField.GetValue(ui) as GameObject;
+                    if (join != null && join.activeInHierarchy)
+                        return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
         internal static bool HangarSelectOpen()
         {
             try
@@ -41,28 +61,36 @@ namespace GroundArsenal
             }
             try
             {
-                GameplayUI ui = SceneSingleton<GameplayUI>.i;
-                if (ui != null && JoinMenuField != null)
-                {
-                    GameObject join = JoinMenuField.GetValue(ui) as GameObject;
-                    if (join != null && join.activeInHierarchy)
-                        return false;
-                }
+                if (JoinMenuOpen())
+                    return false;
             }
             catch { }
             return true;
         }
 
+        internal static bool MenuOpen
+        {
+            get { return _menuOpen; }
+        }
+
         internal static void TickKeys()
         {
-            if (!HangarSelectOpen() || GaMode.Active)
+            if (GaMode.Active)
+            {
+                if (!FieldOpen)
+                    return;
+            }
+            else if (!_menuOpen && !DeathPick)
                 return;
-            int n = GaCombat.Hotbar.Length;
-            for (int i = 0; i < n; i++)
+            if (!GaMode.Active && !HangarSelectOpen() && !DeathPick)
+                return;
+            for (int i = 0; i < GaClass.Count; i++)
             {
                 if (Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i))
                 {
-                    _pickSlot = i;
+                    GaClass.Set((GaKitId)i);
+                    GaCombat.ApplyClassKit();
+                    GaCombat.SavePrefs();
                     return;
                 }
             }
@@ -71,150 +99,139 @@ namespace GroundArsenal
         internal static void Draw()
         {
             if (GaMode.Active)
-                return;
-            if (!HangarSelectOpen())
             {
-                _docked = false;
+                if (FieldOpen)
+                    DrawSpawnVisor(true);
                 return;
             }
-            Ensure();
-            if (!_docked)
+            bool hangar = HangarSelectOpen();
+            if (!hangar && !DeathPick)
             {
-                _docked = true;
-                float w = Screen.width * 0.42f;
-                if (w < 620f)
-                    w = 620f;
-                if (w > 760f)
-                    w = 760f;
-                if (w > Screen.width - 24f)
-                    w = Screen.width - 24f;
-                float h = Screen.height - 40f;
-                if (h > 900f)
-                    h = 900f;
-                if (h < 560f)
-                    h = 560f;
-                _win = new Rect(12f, 20f, w, h);
+                _menuOpen = false;
+                return;
             }
-            if (_win.width < 580f)
-                _win.width = 580f;
-            if (_win.height < 520f)
-                _win.height = 520f;
-            _win = GUI.Window(0x47414847, _win, DrawWindow, "Ground Arsenal infantry");
+            if (DeathPick && !hangar)
+                _menuOpen = true;
+            DrawSpawnVisor(DeathPick);
+            DrawChip();
             if (GaHud.CatalogOpen)
                 ArmorCatalogService.Draw();
         }
 
-        private static void DrawWindow(int id)
+        private static void DrawSpawnVisor(bool force)
         {
-            try
+            Ensure();
+            float a = GaFxUi.Smooth(GaFxUi.Hangar);
+            if (force && a < 0.2f)
+                a = 1f;
+            if (a > 0.02f)
             {
-                DrawWindowBody();
+                GaFxUi.Dim(a * 0.42f);
+                Color prev = GUI.color;
+                GUI.color = new Color(1f, 1f, 1f, a);
+                GaHud.DrawVisorFrame();
+                GUI.color = prev;
+                GaSpawnUi.Draw(a);
             }
-            catch (Exception ex)
-            {
-                GUILayout.Label("Infantry menu failed: " + ex.Message);
-            }
-            GUI.DragWindow(new Rect(0f, 0f, 10000f, 22f));
         }
 
-        private static void DrawWindowBody()
+        internal static void ToggleField()
         {
-            GaIcons.Ensure();
-            GaCombat.LoadPrefs();
-            GUILayout.Label(
-                GaCatalog.Count.ToString()
-                    + " modeled guns. Rank "
-                    + GaCombat.PlayerRank().ToString()
-                    + ". Keys 1-9 pick slot. Slot 1 is carry-on. Quote (') = AP table.",
-                _body);
-            GUILayout.Label("Hotbar slot (1-9):", _body);
-            GUILayout.BeginHorizontal();
-            for (int s = 0; s < GaCombat.Hotbar.Length; s++)
+            if (_fieldFrame == Time.frameCount)
+                return;
+            _fieldFrame = Time.frameCount;
+            if (FieldOpen)
+                CloseField();
+            else
+                OpenField();
+        }
+
+        internal static void OpenField()
+        {
+            if (!GaMode.Active || GaMode.Dead)
+                return;
+            FieldOpen = true;
+            GaHud.ArsenalOpen = false;
+            GaHud.CatalogOpen = false;
+            GaShop.Close();
+            try
             {
-                if (s > 0 && (s % 3) == 0)
-                {
-                    GUILayout.EndHorizontal();
-                    GUILayout.BeginHorizontal();
-                }
-                string lab = (s + 1).ToString();
-                if (s == 0)
-                    lab = "1 CARRY";
-                if (GUILayout.Button(lab, s == _pickSlot ? _btnOn : _btn, GUILayout.Height(32f)))
-                    _pickSlot = s;
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
             }
-            GUILayout.EndHorizontal();
-            GaGun cur = GaCatalog.Get(GaCombat.Hotbar[_pickSlot]);
-            GUILayout.Label("Slot " + (_pickSlot + 1).ToString() + ": " + GaCatalog.Name(cur, false)
-                + "  PEN " + Mathf.RoundToInt(cur.Pen).ToString()
-                + "  " + GaCatalog.CostM(cur).ToString("0.00") + "M", _body);
-            float listH = _win.height - 340f;
-            if (listH < 220f)
-                listH = 220f;
-            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(listH));
-            for (int i = 0; i < GaCatalog.Count; i++)
+            catch { }
+        }
+
+        internal static void CloseField()
+        {
+            if (!FieldOpen)
+                return;
+            FieldOpen = false;
+            if (!GaMode.Active || GaMode.Dead || GaMode.Downed)
+                return;
+            try
             {
-                GaGun g = GaCatalog.All[i];
-                bool on = false;
-                for (int h = 0; h < GaCombat.Hotbar.Length; h++)
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+            }
+            catch { }
+        }
+
+        internal static void OpenDeath()
+        {
+            DeathPick = true;
+            _menuOpen = true;
+            GaConfig.SetEnabled(true);
+            try { CursorManager.SetFlag(CursorFlags.SelectionMenu, true); }
+            catch { }
+            AircraftSelectionMenu menu = CachedMenu();
+            if (menu != null)
+            {
+                try { menu.gameObject.SetActive(false); }
+                catch { }
+            }
+            try
+            {
+                GameplayUI ui = SceneSingleton<GameplayUI>.i;
+                if (ui != null && GameplaySelMenu != null)
                 {
-                    if (GaCombat.Hotbar[h] == g.Id)
-                        on = true;
-                }
-                Rect row = GUILayoutUtility.GetRect(1f, 58f, GUILayout.ExpandWidth(true));
-                Texture2D ic = GaIcons.Get(g);
-                if (ic != null)
-                    GUI.DrawTexture(new Rect(row.x, row.y + 4f, 88f, 50f), ic, ScaleMode.ScaleToFit);
-                string tag = "";
-                if (!GaCombat.Unlocked(g))
-                    tag = "  LOCK RANK " + g.Rank.ToString();
-                else if (GaCombat.Hotbar[0] == g.Id)
-                    tag = "  [CARRY]";
-                else if (on)
-                    tag = "  [HOTBAR]";
-                string label = g.En + "  " + GaCatalog.CalLabel(g) + "  PEN " + Mathf.RoundToInt(g.Pen).ToString()
-                    + "  " + GaCatalog.CostM(g).ToString("0.00") + "M" + tag;
-                if (GUI.Button(new Rect(row.x + 92f, row.y, row.width - 92f, 56f), label, on ? _btnOn : _btn))
-                {
-                    if (!GaCombat.Unlocked(g))
-                        GaMode.Deny("Rank " + g.Rank.ToString() + " required.", "Rank " + g.Rank.ToString() + " required.");
-                    else
-                    {
-                        GaCombat.Hotbar[_pickSlot] = g.Id;
-                        GaCombat.GiveGunAmmo(g);
-                        GaCombat.SavePrefs();
-                    }
+                    GameObject go = GameplaySelMenu.GetValue(ui) as GameObject;
+                    if (go != null)
+                        go.SetActive(false);
                 }
             }
-            GUILayout.EndScrollView();
-            float kitCost = GaCombat.KitCostM();
-            float funds = GaFunds.Read();
-            string dep = "DEPLOY  " + kitCost.ToString("0.00") + "M   funds " + funds.ToString("0.0") + "M";
-            if (funds + 0.001f < kitCost)
-                dep = "NEED " + kitCost.ToString("0.00") + "M  (have " + funds.ToString("0.0") + "M)";
-            if (GUILayout.Button(dep, GUILayout.Height(44f)))
+            catch { }
+        }
+
+        internal static void ClearDeath()
+        {
+            DeathPick = false;
+        }
+
+        private static void DrawChip()
+        {
+            float chipW = 188f;
+            float chipH = 28f;
+            Rect chip = new Rect(18f, 8f, chipW, chipH);
+            int prevDepth = GUI.depth;
+            GUI.depth = -997;
+            Color prevBg = GUI.backgroundColor;
+            GUI.backgroundColor = _menuOpen
+                ? new Color(0.35f, 0.28f, 0.08f, 1f)
+                : new Color(0.08f, 0.16f, 0.12f, 1f);
+            string lab = _menuOpen ? "Infantry | ON" : "Infantry | OFF";
+            if (GUI.Button(chip, lab, _chipBtn))
             {
-                GaCombat.SavePrefs();
-                if (!GaConfig.IsEnabled())
-                    GaMode.Deny("Turn infantry ON first.", "Turn infantry ON first.");
-                else
-                    GaMode.HangarQueued = true;
+                _menuOpen = !_menuOpen;
+                GaConfig.SetEnabled(_menuOpen);
+                if (!_menuOpen)
+                {
+                    if (GaHud.CatalogOpen)
+                        GaHud.CloseMenus();
+                }
             }
-            if (GUILayout.Button(GaConfig.IsEnabled() ? "Infantry ENABLED  (click to disable)" : "Infantry DISABLED  (click to enable)",
-                GUILayout.Height(32f)))
-                GaConfig.SetEnabled(!GaConfig.IsEnabled());
-            if (GUILayout.Button("Armor table", GUILayout.Height(32f)))
-            {
-                ArmorCatalogService.EnsureScanned();
-                GaHud.CatalogOpen = true;
-            }
-            if (GaConfig.WantPerf())
-            {
-                float fps = Time.unscaledDeltaTime > 0.0001f ? (1f / Time.unscaledDeltaTime) : 0f;
-                GUILayout.Label("Standalone " + GaInfo.Version + "   "
-                    + Mathf.RoundToInt(fps).ToString() + " fps   sparks "
-                    + GaFx.Live.ToString()
-                    + (GaOritasy.HasModularArmor ? "   Oritasy AP present" : "   GA AP"), _body);
-            }
+            GUI.backgroundColor = prevBg;
+            GUI.depth = prevDepth;
         }
 
         internal static bool TrySpawn(out Vector3 pos, out float yaw)
@@ -236,9 +253,9 @@ namespace GroundArsenal
                 return false;
             pos = t.position;
             yaw = t.eulerAngles.y;
-            Vector3 start = pos + Vector3.up * 12f;
+            Vector3 start = pos + Vector3.up * 10f;
             RaycastHit hit;
-            if (Physics.Raycast(start, Vector3.down, out hit, 80f, ~0, QueryTriggerInteraction.Ignore))
+            if (GaPhys.RayDown(start, 80f, out hit))
                 pos = hit.point + Vector3.up * 0.08f;
             else
                 pos = pos + Vector3.up * 0.2f;
@@ -247,7 +264,9 @@ namespace GroundArsenal
 
         internal static void CloseUi()
         {
-            AircraftSelectionMenu menu = UnityEngine.Object.FindObjectOfType<AircraftSelectionMenu>();
+            CloseField();
+            ClearDeath();
+            AircraftSelectionMenu menu = CachedMenu();
             if (menu != null)
             {
                 try
@@ -293,10 +312,10 @@ namespace GroundArsenal
                     }
                 }
             }
-            Hangar[] all = UnityEngine.Object.FindObjectsOfType<Hangar>();
+            Hangar[] all = GaPerfFrameGate.Hangars();
             if (all == null || all.Length == 0)
                 return null;
-            Camera cam = Camera.main;
+            Camera cam = GaPerfFrameGate.Cam();
             Vector3 camPos = cam != null ? cam.transform.position : Vector3.zero;
             Hangar best = null;
             float bestD = float.MaxValue;
@@ -321,20 +340,350 @@ namespace GroundArsenal
             return best;
         }
 
+        internal static bool MenuAirbaseIsCarrier(Airbase ab)
+        {
+            return IsCarrierAirbase(ab);
+        }
+
+        internal static bool PlayerOnCarrierDeck()
+        {
+            if (!GaMode.Active)
+                return false;
+            RaycastHit hit;
+            if (!GaPhys.RayDown(GaMode.EyePos, 40f, out hit))
+                return false;
+            try
+            {
+                return IsCarrierShip(hit.collider.GetComponentInParent<Ship>());
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static Airbase PickedBase;
+
+        internal static void PickBase(Airbase ab)
+        {
+            PickedBase = ab;
+        }
+
+        internal static bool TryForceSpawn(GaForceKind kind, out Vector3 pos, out float yaw)
+        {
+            pos = Vector3.zero;
+            yaw = 0f;
+            if (PickedBase != null && !PickedBase.disabled)
+            {
+                bool car = IsCarrierAirbase(PickedBase);
+                if (kind == GaForceKind.Sea)
+                {
+                    if (car && SnapHangar(PickedBase, out pos, out yaw))
+                        return true;
+                }
+                else if (!car && SnapHangar(PickedBase, out pos, out yaw))
+                    return true;
+            }
+            if (kind == GaForceKind.Sea)
+                return TrySeaSpawn(out pos, out yaw);
+            return TryLandFieldSpawn(out pos, out yaw);
+        }
+
+        internal static bool MenuIsCarrier()
+        {
+            return IsCarrierAirbase(CurrentAirbase());
+        }
+
+        private static bool TryLandFieldSpawn(out Vector3 pos, out float yaw)
+        {
+            pos = Vector3.zero;
+            yaw = 0f;
+            Airbase ab = NearestFriendlyAirbase(false);
+            if (ab == null)
+                ab = NearestFriendlyAirbase(true);
+            return SnapHangar(ab, out pos, out yaw);
+        }
+
+        private static bool TrySeaSpawn(out Vector3 pos, out float yaw)
+        {
+            pos = Vector3.zero;
+            yaw = 0f;
+            Airbase ab = NearestFriendlyAirbase(true);
+            if (SnapHangar(ab, out pos, out yaw))
+                return true;
+            List<Unit> all = GaPerfFrameGate.PlotUnits();
+            if (all == null)
+                return false;
+            FactionHQ hq = GaPerfFrameGate.Hq();
+            Ship best = null;
+            float bestD = 1e12f;
+            Vector3 at = Vector3.zero;
+            Camera cam = GaPerfFrameGate.Cam();
+            if (cam != null)
+                at = cam.transform.position;
+            for (int i = 0; i < all.Count; i++)
+            {
+                Ship s = all[i] as Ship;
+                if (s == null || s.disabled || !IsCarrierShip(s))
+                    continue;
+                try
+                {
+                    if (hq != null && s.NetworkHQ != null && !object.ReferenceEquals(s.NetworkHQ, hq))
+                        continue;
+                }
+                catch { }
+                float d = (s.transform.position - at).sqrMagnitude;
+                if (d < bestD)
+                {
+                    bestD = d;
+                    best = s;
+                }
+            }
+            if (best == null)
+                return false;
+            Vector3 p = best.transform.position + best.transform.up * 18f;
+            RaycastHit hit;
+            if (GaPhys.RayDown(p, 80f, out hit))
+                pos = hit.point + Vector3.up * 0.08f;
+            else
+                pos = best.transform.position + Vector3.up * 12f;
+            yaw = best.transform.eulerAngles.y;
+            return true;
+        }
+
+        private static bool SnapHangar(Airbase ab, out Vector3 pos, out float yaw)
+        {
+            pos = Vector3.zero;
+            yaw = 0f;
+            if (ab == null)
+                return false;
+            Hangar hangar = null;
+            Hangar[] hs = null;
+            try { hs = ab.GetComponentsInChildren<Hangar>(true); }
+            catch { hs = null; }
+            if (hs != null)
+            {
+                for (int i = 0; i < hs.Length; i++)
+                {
+                    if (hs[i] != null && !hs[i].Disabled)
+                    {
+                        hangar = hs[i];
+                        break;
+                    }
+                }
+            }
+            if (hangar == null)
+            {
+                Vector3 p;
+                try { p = ab.center != null ? ab.center.position : ab.transform.position; }
+                catch { p = ab.transform.position; }
+                Vector3 start = p + Vector3.up * 12f;
+                RaycastHit hit;
+                if (GaPhys.RayDown(start, 80f, out hit))
+                    pos = hit.point + Vector3.up * 0.08f;
+                else
+                    pos = p + Vector3.up * 0.2f;
+                yaw = ab.transform.eulerAngles.y;
+                return true;
+            }
+            Transform t = null;
+            try { t = hangar.GetSpawnTransform(); }
+            catch { t = hangar.transform; }
+            if (t == null)
+                t = hangar.transform;
+            pos = t.position;
+            yaw = t.eulerAngles.y;
+            Vector3 lift = pos + Vector3.up * 10f;
+            RaycastHit hit2;
+            if (GaPhys.RayDown(lift, 80f, out hit2))
+                pos = hit2.point + Vector3.up * 0.08f;
+            else
+                pos = pos + Vector3.up * 0.2f;
+            return true;
+        }
+
+        private static Airbase NearestFriendlyAirbase(bool carrier)
+        {
+            Airbase[] abs = GaPerfFrameGate.Airbases();
+            if (abs == null)
+                return null;
+            FactionHQ hq = GaPerfFrameGate.Hq();
+            Vector3 at = Vector3.zero;
+            Camera cam = GaPerfFrameGate.Cam();
+            if (cam != null)
+                at = cam.transform.position;
+            Airbase best = null;
+            float bestD = 1e12f;
+            for (int i = 0; i < abs.Length; i++)
+            {
+                Airbase ab = abs[i];
+                if (ab == null || ab.disabled)
+                    continue;
+                if (IsCarrierAirbase(ab) != carrier)
+                    continue;
+                try
+                {
+                    if (hq != null && ab.CurrentHQ != null && !object.ReferenceEquals(ab.CurrentHQ, hq))
+                        continue;
+                }
+                catch { }
+                Vector3 p;
+                try { p = ab.center != null ? ab.center.position : ab.transform.position; }
+                catch { p = ab.transform.position; }
+                float d = (p - at).sqrMagnitude;
+                if (d < bestD)
+                {
+                    bestD = d;
+                    best = ab;
+                }
+            }
+            return best;
+        }
+
+        private static int _onId;
+        private static float _onAt;
+        private static bool _onVal;
+
+        internal static bool OnCarrier(Aircraft ac)
+        {
+            if (ac == null)
+                return false;
+            int id = ac.GetInstanceID();
+            if (id == _onId && Time.unscaledTime < _onAt)
+                return _onVal;
+            _onId = id;
+            _onAt = Time.unscaledTime + 0.28f;
+            _onVal = OnCarrierNow(ac);
+            return _onVal;
+        }
+
+        private static bool OnCarrierNow(Aircraft ac)
+        {
+            if (ac == null)
+                return false;
+            try
+            {
+                if (IsCarrierShip(ac.GetComponentInParent<Ship>()))
+                    return true;
+            }
+            catch { }
+            RaycastHit hit;
+            if (GaPhys.RayDown(ac.transform.position, 36f, out hit))
+            {
+                try
+                {
+                    if (IsCarrierShip(hit.collider.GetComponentInParent<Ship>()))
+                        return true;
+                }
+                catch { }
+            }
+            try
+            {
+                Airbase[] abs = GaPerfFrameGate.Airbases();
+                if (abs != null)
+                {
+                    Vector3 at = ac.transform.position;
+                    for (int i = 0; i < abs.Length; i++)
+                    {
+                        Airbase ab = abs[i];
+                        if (ab == null || ab.disabled || !IsCarrierAirbase(ab))
+                            continue;
+                        Vector3 p;
+                        try { p = ab.center != null ? ab.center.position : ab.transform.position; }
+                        catch { continue; }
+                        Vector3 d = at - p;
+                        d.y = 0f;
+                        if (d.sqrMagnitude < 160000f && Mathf.Abs(at.y - p.y) < 40f)
+                            return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static bool IsCarrierAirbase(Airbase ab)
+        {
+            if (ab == null)
+                return false;
+            try
+            {
+                Unit u;
+                if (ab.TryGetAttachedUnit(out u) && IsCarrierShip(u as Ship))
+                    return true;
+            }
+            catch { }
+            try
+            {
+                if (IsCarrierShip(ab.GetComponentInParent<Ship>()))
+                    return true;
+            }
+            catch { }
+            return NameLooksCarrier(ab.name);
+        }
+
+        private static bool IsCarrierShip(Ship ship)
+        {
+            if (ship == null)
+                return false;
+            string blob = ship.name;
+            try
+            {
+                ShipDefinition sd = ship.definition as ShipDefinition;
+                if (sd != null)
+                    blob = blob + " " + (sd.jsonKey ?? "") + " " + (sd.unitName ?? "");
+            }
+            catch { }
+            return NameLooksCarrier(blob);
+        }
+
+        private static bool NameLooksCarrier(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return false;
+            string l = s.ToLowerInvariant();
+            if (l.IndexOf("destroyer", System.StringComparison.Ordinal) >= 0)
+                return false;
+            return l.IndexOf("carrier", System.StringComparison.Ordinal) >= 0
+                || l.IndexOf("hyperion", System.StringComparison.Ordinal) >= 0;
+        }
+
+        internal static Airbase FieldAirbase()
+        {
+            if (PickedBase != null && !PickedBase.disabled && !IsCarrierAirbase(PickedBase))
+                return PickedBase;
+            Airbase ab = CurrentAirbase();
+            if (ab != null && !IsCarrierAirbase(ab))
+                return ab;
+            return NearestFriendlyAirbase(false);
+        }
+
         private static Airbase CurrentAirbase()
         {
-            AircraftSelectionMenu menu = UnityEngine.Object.FindObjectOfType<AircraftSelectionMenu>();
+            if (Time.unscaledTime < _abAt)
+                return _ab;
+            _abAt = Time.unscaledTime + 0.45f;
+            AircraftSelectionMenu menu = CachedMenu();
             if (menu != null && AirbaseField != null)
             {
                 try
                 {
-                    Airbase ab = AirbaseField.GetValue(menu) as Airbase;
-                    if (ab != null)
-                        return ab;
+                    _ab = AirbaseField.GetValue(menu) as Airbase;
+                    return _ab;
                 }
                 catch { }
             }
+            _ab = null;
             return null;
+        }
+
+        private static AircraftSelectionMenu CachedMenu()
+        {
+            if (Time.unscaledTime < _menuAt && _menu != null)
+                return _menu;
+            _menuAt = Time.unscaledTime + 0.45f;
+            _menu = UnityEngine.Object.FindObjectOfType<AircraftSelectionMenu>();
+            return _menu;
         }
 
         private static void Ensure()
@@ -342,18 +691,13 @@ namespace GroundArsenal
             if (_styles)
                 return;
             _styles = true;
-            _body = new GUIStyle(GUI.skin.label);
-            _body.fontSize = 15;
-            _body.wordWrap = true;
-            _body.normal.textColor = Color.white;
-            _btn = new GUIStyle(GUI.skin.button);
-            _btn.fontSize = 14;
-            _btn.wordWrap = true;
-            _btn.alignment = TextAnchor.MiddleLeft;
-            _btn.clipping = TextClipping.Overflow;
-            _btnOn = new GUIStyle(_btn);
-            _btnOn.fontStyle = FontStyle.Bold;
-            _btnOn.normal.textColor = new Color(1f, 0.9f, 0.3f);
+            _chipBtn = new GUIStyle(GUI.skin.button);
+            _chipBtn.fontSize = 12;
+            _chipBtn.fontStyle = FontStyle.Bold;
+            _chipBtn.alignment = TextAnchor.MiddleLeft;
+            _chipBtn.clipping = TextClipping.Overflow;
+            _chipBtn.padding = new RectOffset(10, 8, 4, 4);
+            _chipBtn.normal.textColor = new Color(0.8f, 0.95f, 0.85f, 0.98f);
         }
     }
 }

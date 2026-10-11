@@ -72,15 +72,13 @@ namespace GroundArsenal
         {
             if (Time.time < _scanAt)
                 return;
-            _scanAt = Time.time + 0.22f;
+            _scanAt = Time.time + 0.55f;
             List<Unit> all = null;
             try { all = UnitRegistry.allUnits; }
             catch { }
             if (all == null)
                 return;
-            FactionHQ hq = null;
-            try { GameManager.GetLocalHQ(out hq); }
-            catch { }
+            FactionHQ hq = GaPerfFrameGate.Hq();
             Unit linked = GaMode.LinkedUnit();
             for (int i = 0; i < all.Count; i++)
             {
@@ -178,9 +176,7 @@ namespace GroundArsenal
             go.layer = 0;
             go.transform.position = pos;
             go.transform.localScale = new Vector3(0.38f, 0.22f, 0.28f);
-            Collider col = go.GetComponent<Collider>();
-            if (col != null)
-                UnityEngine.Object.Destroy(col);
+            GaPhys.Strip(go);
             Renderer r = go.GetComponent<Renderer>();
             Material m = Mat();
             if (r != null && m != null)

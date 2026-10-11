@@ -381,8 +381,14 @@ namespace GroundArsenal
             ref float blastDamage,
             ref float fireDamage,
             ref float impactDamage,
-            PersistentID dealerID)
+            ref PersistentID dealerID)
         {
+            if (GaMode.Active && !dealerID.IsValid)
+            {
+                PersistentID d = GaMode.DealerId();
+                if (d.IsValid)
+                    dealerID = d;
+            }
             if (!GaConfig.IsEnabled() || GaOritasy.HasModularArmor)
                 return;
             GaVehicleArmor.FilterTakeDamage(

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace GroundArsenal
@@ -10,6 +11,11 @@ namespace GroundArsenal
         internal const string PrefCarry = "GroundArsenal.Carry";
 
         internal static int[] Hotbar = DefaultHotbar();
+        internal static float BloomAmt
+        {
+            get { return _bloom; }
+        }
+
         internal static int Slot;
         internal static int[] Mag = new int[GaCatalog.Count];
         internal static int[] Pool = new int[GaCatalog.CalCount];
@@ -47,29 +53,62 @@ namespace GroundArsenal
             internal bool Homing;
             internal Unit Target;
             internal float Turn;
+            internal bool Laser;
+            internal Vector3 Aim;
         }
 
         private static readonly List<Bolt> Bolts = new List<Bolt>(32);
+        private static readonly RaycastHit[] _rayBuf = new RaycastHit[16];
+        private static readonly Collider[] SlashBuf = new Collider[64];
+        private static readonly HashSet<int> SlashSeen = new HashSet<int>();
+        private static int _fxShotN;
+
+        internal static bool IsBlade(GaGun g)
+        {
+            return g != null && (g.Id == 50 || g.Family == 12 || g.Body == "type77.obj");
+        }
+
+        internal static int HeldId
+        {
+            get
+            {
+                if (Slot < 0 || Slot >= Hotbar.Length)
+                    return -1;
+                return Hotbar[Slot];
+            }
+        }
 
         internal static GaGun Current
         {
-            get { return GaCatalog.Get(Hotbar[Slot]); }
+            get
+            {
+                int id = HeldId;
+                if (id < 0 || id >= GaCatalog.Count)
+                    return null;
+                return GaCatalog.Get(id);
+            }
+        }
+
+        private static int CarryCount()
+        {
+            int n = 0;
+            int cap = Hotbar.Length;
+            if (cap > 4)
+                cap = 4;
+            for (int i = 0; i < cap; i++)
+            {
+                if (Hotbar[i] >= 0)
+                    n = i + 1;
+            }
+            if (n < 1)
+                n = 1;
+            return n;
         }
 
         internal static int[] DefaultHotbar()
         {
-            return new int[]
-            {
-                GaCatalog.FindBody("rev_body.obj"),
-                GaCatalog.FindBody("pistol_body.obj"),
-                GaCatalog.FindBody("q_SubmachineGun_1.obj"),
-                GaCatalog.FindBody("q_Shotgun_1.obj"),
-                GaCatalog.FindBody("q_M16.obj"),
-                GaCatalog.FindBody("q_AK47.obj"),
-                GaCatalog.FindBody("q_SniperRifle_1.obj"),
-                GaCatalog.FindBody("q_RPG7.obj"),
-                GaCatalog.FindBody("at4.obj")
-            };
+            int[] kit = GaClass.Guns(GaKitId.Assault);
+            return new int[] { kit[0], kit[1], kit[2], kit[3] };
         }
 
         internal static void LoadPrefs()
@@ -138,6 +177,84 @@ namespace GroundArsenal
             return GaCatalog.CostM(GaCatalog.Get(LoadCarry()));
         }
 
+        internal static void ApplyClassKit()
+        {
+            int[] guns = GaClass.Guns(GaClass.Picked);
+            for (int i = 0; i < Hotbar.Length; i++)
+            {
+                if (i < guns.Length && guns[i] >= 0)
+                    Hotbar[i] = guns[i];
+                else
+                    Hotbar[i] = -1;
+            }
+            FillAmmo(true);
+            Slot = 0;
+            GaFps.FillNades();
+        }
+
+        internal static float ClassCostM()
+        {
+            int[] guns = GaClass.Guns(GaClass.Picked);
+            bool[] seen = new bool[GaCatalog.Count];
+            float sum = 0f;
+            for (int i = 0; i < guns.Length; i++)
+            {
+                int id = guns[i];
+                if (id < 0 || id >= GaCatalog.Count || seen[id])
+                    continue;
+                seen[id] = true;
+                sum += GaCatalog.CostM(GaCatalog.Get(id));
+            }
+            return sum;
+        }
+
+        internal static void ResupplyPool(int n)
+        {
+            GaGun g = Current;
+            if (g == null)
+                return;
+            AddPool(g.CalId, n);
+        }
+
+        internal static int ResupplyFromPack()
+        {
+            int got = 0;
+            bool[] seen = new bool[GaCatalog.CalCount];
+            for (int i = 0; i < Hotbar.Length; i++)
+            {
+                int id = Hotbar[i];
+                if (id < 0 || id >= GaCatalog.Count)
+                    continue;
+                GaGun g = GaCatalog.Get(id);
+                if (g == null)
+                    continue;
+                if (g.CalId >= 0 && g.CalId < seen.Length)
+                {
+                    if (seen[g.CalId])
+                        continue;
+                    seen[g.CalId] = true;
+                }
+                int pack = g.Reserve;
+                if (pack < 8)
+                    pack = 8;
+                if (g.Fire == 4)
+                    pack = 2;
+                got += AddPool(g.CalId, pack);
+                if (Mag[g.Id] < g.Mag)
+                {
+                    int fill = g.Mag - Mag[g.Id];
+                    Mag[g.Id] = g.Mag;
+                    got += fill;
+                }
+            }
+            if (GaFps.Nades < GaFps.NadeMax)
+            {
+                GaFps.Nades++;
+                got += 1;
+            }
+            return got;
+        }
+
         internal static void ApplyHangarKit()
         {
             LoadPrefs();
@@ -164,6 +281,8 @@ namespace GroundArsenal
             int fallback = FirstUnlocked();
             for (int i = 0; i < Hotbar.Length; i++)
             {
+                if (Hotbar[i] < 0)
+                    continue;
                 if (!UnlockedId(Hotbar[i]))
                     Hotbar[i] = fallback;
             }
@@ -219,12 +338,15 @@ namespace GroundArsenal
             int n = allSlots ? Hotbar.Length : 1;
             for (int i = 0; i < n; i++)
             {
-                GaGun g = GaCatalog.Get(Hotbar[i]);
+                int id = Hotbar[i];
+                if (id < 0 || id >= GaCatalog.Count)
+                    continue;
+                GaGun g = GaCatalog.Get(id);
                 if (g == null || seen[g.Id])
                     continue;
                 seen[g.Id] = true;
                 Mag[g.Id] = g.Mag;
-                AddPool(g.CalId, g.Reserve);
+                AddPool(g.CalId, ReserveFor(g));
             }
         }
 
@@ -242,9 +364,11 @@ namespace GroundArsenal
         {
             if (cal < 0 || cal >= Pool.Length || amt == 0)
                 return 0;
-            int cap = GaCatalog.MagSizeForCal(cal) * 12;
+            int cap = GaCatalog.MagSizeForCal(cal) * PoolMags();
             if (cal == 7 || cal == 8 || cal == 9)
-                cap = 8;
+                cap = GaClass.Picked == GaKitId.Assault ? 16 : 8;
+            if (GaClass.Picked == GaKitId.Tsf && cal == 5)
+                cap = 1200;
             int before = Pool[cal];
             int next = before + amt;
             if (next < 0)
@@ -260,9 +384,32 @@ namespace GroundArsenal
             if (g == null)
                 return;
             Mag[g.Id] = g.Mag;
+            int want = ReserveFor(g);
             int have = PoolOf(g);
-            if (have < g.Reserve)
-                AddPool(g.CalId, g.Reserve - have);
+            if (have < want)
+                AddPool(g.CalId, want - have);
+        }
+
+        internal static int ReserveFor(GaGun g)
+        {
+            if (g == null)
+                return 0;
+            float mul = GaClass.ReserveMul(GaClass.Picked);
+            int n = Mathf.RoundToInt(g.Reserve * mul);
+            if (n < 0)
+                n = 0;
+            if (n < 1 && g.Mag > 0)
+                n = 1;
+            return n;
+        }
+
+        private static int PoolMags()
+        {
+            if (GaClass.Picked == GaKitId.Assault)
+                return 24;
+            if (GaClass.Picked == GaKitId.Support)
+                return 16;
+            return 12;
         }
 
         internal static int MagState(GaGun g)
@@ -277,15 +424,19 @@ namespace GroundArsenal
             return 2;
         }
 
+        [SkipLocalsInit]
         internal static void Tick(Transform eye, float dt)
         {
             if (eye == null)
                 return;
             TickBolts(dt);
             GaView.Tick();
+            if (GaRide.Busy)
+                return;
             if (GaHud.BlocksLook)
                 return;
-            TickHipAssist(eye, dt);
+            if (!GaTsf.Owns())
+                TickHipAssist(eye, dt);
             WheelAndKeys();
             if (_burstSlot != Slot)
             {
@@ -293,7 +444,7 @@ namespace GroundArsenal
                 _burstSlot = Slot;
             }
             _bloom = Mathf.MoveTowards(_bloom, 0f, dt * (Ads > 0.5f ? 1.8f : 1.05f));
-            bool adsWant = CanAds() && Input.GetMouseButton(1);
+            bool adsWant = CanAds() && GaVr.Ads();
             Ads = Mathf.MoveTowards(Ads, adsWant ? 1f : 0f, dt * 7f);
             PollZoom(adsWant);
             TickLock(eye, dt);
@@ -307,24 +458,30 @@ namespace GroundArsenal
             GaGun g = Current;
             if (g == null)
                 return;
-            if (Input.GetKeyDown(KeyCode.R))
+            bool blade = IsBlade(g);
+            if (!blade && (Input.GetKeyDown(KeyCode.R) || GaVr.ReloadDown))
             {
                 StartReload(g);
                 return;
             }
             bool fire = false;
-            if (g.Fire == 2)
+            if (blade || g.Fire == 1 || g.Fire == 5)
+                fire = GaVr.Fire();
+            else if (g.Fire == 2)
             {
-                if (Input.GetMouseButtonDown(0) && _burstLeft <= 0)
+                if (GaVr.FirePressed() && _burstLeft <= 0)
                     _burstLeft = 3;
                 fire = _burstLeft > 0;
             }
-            else if (g.Fire == 1 || g.Fire == 5)
-                fire = Input.GetMouseButton(0);
             else
-                fire = Input.GetMouseButtonDown(0);
+                fire = GaVr.FirePressed();
             if (!fire || Time.time < NextShotAt)
                 return;
+            if (blade)
+            {
+                Slash(eye, g);
+                return;
+            }
             if (Mag[g.Id] <= 0)
             {
                 StartReload(g);
@@ -335,12 +492,23 @@ namespace GroundArsenal
                 Status = "NO LOCK";
                 return;
             }
-            bool tap = Input.GetMouseButtonDown(0);
+            bool tap = GaVr.FirePressed();
             Shoot(eye, g, tap);
             if (g.Fire == 2 && _burstLeft > 0)
                 _burstLeft--;
             GaView.PlayFire();
             Vector3 muzzle = MuzzlePos(eye);
+            Vector3 flashDir = eye.forward;
+            if (GaTsf.Owns() && g.Id == 49)
+            {
+                Vector3 muz;
+                Vector3 muzDir;
+                if (GaTsf.TryMuzzle(out muz, out muzDir))
+                {
+                    muzzle = muz;
+                    flashDir = muzDir;
+                }
+            }
             float flashScale = 1f;
             bool wideFlash = false;
             if (g.Fire == 3 || g.Family == 5)
@@ -357,7 +525,7 @@ namespace GroundArsenal
                 flashScale = 1.75f;
                 wideFlash = true;
             }
-            GaFx.Muzzle(muzzle, eye.forward, flashScale, wideFlash);
+            GaFx.Muzzle(muzzle, flashDir, flashScale, wideFlash);
             FlashUntil = Time.time + 0.048f;
         }
 
@@ -412,9 +580,9 @@ namespace GroundArsenal
             if (g.Family == 10)
                 return 5500f;
             if (g.Family == 11)
-                return 2800f;
+                return 12000f;
             if (g.Family == 12)
-                return 450f;
+                return GaTsf.Owns() ? 18f : 3.4f;
             if (g.Family == 15)
                 return 3000f;
             return 2000f;
@@ -442,7 +610,8 @@ namespace GroundArsenal
                 return false;
             if (g.Family == 13 || g.Family == 14)
                 return false;
-            if (g.Body == "at4.obj" || g.Body == "q_RPG7.obj" || g.Body == "rbs70.obj")
+            if (g.Body == "at4.obj" || g.Body == "q_RPG7.obj" || g.Body == "rbs70.obj"
+                || g.Body == "type77.obj")
                 return false;
             return true;
         }
@@ -481,6 +650,13 @@ namespace GroundArsenal
 
         internal static float FovMul()
         {
+            if (GaRide.Busy)
+            {
+                float optic = GaRide.OpticsMissile()
+                    ? Mathf.Lerp(0.32f, 0.12f, Zoom)
+                    : Mathf.Lerp(0.44f, 0.18f, Zoom);
+                return Mathf.Lerp(1f, optic, Ads);
+            }
             float tight = 0.42f;
             if (IsSniper())
                 tight = Mathf.Lerp(0.16f, 0.038f, Zoom);
@@ -526,26 +702,177 @@ namespace GroundArsenal
 
         private static void WheelAndKeys()
         {
-            bool adsHeld = CanAds() && Input.GetMouseButton(1);
+            int was = Slot;
+            bool adsHeld = CanAds() && GaVr.Ads();
             float w = Input.GetAxis("Mouse ScrollWheel");
             if (!adsHeld)
             {
+                int n = CarryCount();
+                if (n < 1)
+                    n = 1;
                 if (w > 0.01f)
-                    Slot = (Slot + 1) % Hotbar.Length;
+                    Slot = (Slot + 1) % n;
                 else if (w < -0.01f)
-                    Slot = (Slot + Hotbar.Length - 1) % Hotbar.Length;
+                    Slot = (Slot + n - 1) % n;
             }
-            for (int i = 0; i < 9; i++)
+            for (int i = 0; i < 4; i++)
             {
-                if (Input.GetKeyDown(KeyCode.Alpha1 + i))
+                if (Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i))
                     Slot = i;
             }
-            GaView.ShowCurrent();
+            if (Slot < 0)
+                Slot = 0;
+            if (Slot >= Hotbar.Length)
+                Slot = Hotbar.Length - 1;
+            if (Slot != was && !GaRide.Busy)
+                GaHud.NoteSlot();
+            if (!GaRide.Busy && !GaTsf.Owns())
+                GaView.ShowCurrent();
+        }
+
+        private static void Slash(Transform eye, GaGun g)
+        {
+            float rpm = g != null ? g.Rpm : 220f;
+            if (rpm < 80f)
+                rpm = 80f;
+            NextShotAt = Time.time + 60f / rpm;
+            Vector3 origin = eye != null ? eye.position : Vector3.zero;
+            Vector3 fwd = eye != null ? eye.forward : Vector3.forward;
+            if (GaTsf.Owns())
+            {
+                Transform pawn = GaMode.PawnRoot;
+                if (pawn != null)
+                    origin = pawn.position + Vector3.up * 9.2f;
+            }
+            float reach = GaTsf.Owns() ? 16f : 3.2f;
+            float rad = GaTsf.Owns() ? 9.5f : 1.7f;
+            Vector3 center = origin + fwd * (reach * 0.42f);
+            SlashSeen.Clear();
+            int n = 0;
+            try
+            {
+                n = Physics.OverlapSphereNonAlloc(center, rad, SlashBuf, GaPhys.WorldMask,
+                    QueryTriggerInteraction.Ignore);
+            }
+            catch
+            {
+                n = 0;
+            }
+            for (int i = 0; i < n; i++)
+            {
+                Collider col = SlashBuf[i];
+                if (col == null)
+                    continue;
+                SlashCollider(col, g, fwd);
+            }
+            try
+            {
+                List<Unit> all = UnitRegistry.allUnits;
+                if (all != null)
+                {
+                    float r2 = (reach + 4f) * (reach + 4f);
+                    for (int i = 0; i < all.Count; i++)
+                    {
+                        Unit u = all[i];
+                        if (u == null || u.disabled)
+                            continue;
+                        Vector3 to = u.transform.position - origin;
+                        if (to.sqrMagnitude > r2)
+                            continue;
+                        if (Vector3.Dot(to.normalized, fwd) < 0.18f)
+                            continue;
+                        SlashUnit(u, g, fwd);
+                    }
+                }
+            }
+            catch { }
+            for (int i = 0; i < GaDropSquad.Hostiles.Count; i++)
+            {
+                GaDropBot bot = GaDropSquad.Hostiles[i];
+                if (bot == null || bot.Friendly)
+                    continue;
+                Vector3 to = bot.transform.position - origin;
+                if (to.sqrMagnitude > (reach + 2f) * (reach + 2f))
+                    continue;
+                if (Vector3.Dot(to.normalized, fwd) < 0.12f)
+                    continue;
+                SlashBot(bot, g);
+            }
+            Status = GaMode.Zh ? "近战" : "MELEE";
+            FlashUntil = Time.time + 0.04f;
+        }
+
+        private static void SlashCollider(Collider col, GaGun g, Vector3 fwd)
+        {
+            Transform pawn = GaMode.PawnRoot;
+            if (pawn != null && (col.transform == pawn || col.transform.IsChildOf(pawn)))
+                return;
+            GaDropBot bot = GaPhys.Bot(col);
+            if (bot != null)
+            {
+                if (!bot.Friendly)
+                    SlashBot(bot, g);
+                return;
+            }
+            Unit u = null;
+            try { u = col.GetComponentInParent<Unit>(); }
+            catch { }
+            if (u != null)
+                SlashUnit(u, g, fwd);
+        }
+
+        private static void SlashBot(GaDropBot bot, GaGun g)
+        {
+            if (bot == null)
+                return;
+            int id = bot.GetInstanceID();
+            if (!SlashSeen.Add(id))
+                return;
+            bot.HurtByPlayer = true;
+            float dmg = g != null ? g.Damage : 90f;
+            bot.ApplyDamage(dmg, 0f, 0f, dmg * 0.35f);
+            GaFps.HitMarker(bot.Hp <= 0f || bot.Downed);
+        }
+
+        private static void SlashUnit(Unit u, GaGun g, Vector3 fwd)
+        {
+            if (u == null || g == null)
+                return;
+            Unit mine = GaMode.LinkedUnit();
+            if (mine != null && object.ReferenceEquals(u, mine))
+                return;
+            if (SkipLinked(u))
+                return;
+            int id = u.GetInstanceID();
+            if (!SlashSeen.Add(id))
+                return;
+            try
+            {
+                if (u.disabled)
+                    return;
+            }
+            catch { }
+            try
+            {
+                FactionHQ local;
+                if (GameManager.GetLocalHQ(out local) && local != null && u.NetworkHQ == local)
+                    return;
+            }
+            catch { }
+            HurtUnit(u, g, fwd);
+        }
+
+        private static bool SkipLinked(Unit u)
+        {
+            Aircraft parked = GaMode.ParkedAircraft;
+            if (parked == null || u == null)
+                return false;
+            return object.ReferenceEquals(u, parked);
         }
 
         private static void StartReload(GaGun g)
         {
-            if (g == null)
+            if (g == null || IsBlade(g))
                 return;
             if (PoolOf(g) <= 0 || Mag[g.Id] >= g.Mag)
                 return;
@@ -558,8 +885,9 @@ namespace GroundArsenal
                 return;
             _reloadId = g.Id;
             _reloadTake = take;
-            ReloadUntil = Time.time + (g.Fire == 4 ? 2.4f : 1.7f);
+            ReloadUntil = Time.time + (g.Fire == 4 ? 2.4f : 1.7f) * GaClass.ReloadMul(GaClass.Picked);
             GaView.PlayReload(g);
+            GaRadio.PlayerReload();
         }
 
         private static void FinishReload()
@@ -594,6 +922,7 @@ namespace GroundArsenal
                 bloomAdd = 0.20f;
             _bloom = Mathf.Min(1f, _bloom + bloomAdd);
             float spread = (g.Spread + _bloom * g.Spread * 2.4f) * (1f - Ads * 0.72f);
+            spread *= GaClass.SpreadMul(GaClass.Picked);
             if (GaMode.Sprinting)
                 spread *= 1.7f;
             else if (GaMode.MoveSpeed > 1.2f)
@@ -601,25 +930,57 @@ namespace GroundArsenal
             if (tap && !spray)
                 spread = 0f;
             Vector3 origin = MuzzlePos(eye);
+            Vector3 shotDir = eye.forward;
+            Unit guide = null;
+            bool tsfGun = GaTsf.Owns() && g.Id == 49;
+            if (tsfGun)
+            {
+                Vector3 muz;
+                Vector3 muzDir;
+                if (GaTsf.TryMuzzle(out muz, out muzDir))
+                {
+                    origin = muz;
+                    shotDir = muzDir;
+                }
+                guide = FindPipTarget(eye, 6.5f, 12000f);
+                Vector3 aim;
+                if (guide != null)
+                    aim = AimPoint(guide);
+                else if (eye != null)
+                    aim = eye.position + eye.forward * 4000f;
+                else
+                    aim = origin + shotDir * 4000f;
+                Vector3 to = aim - origin;
+                if (to.sqrMagnitude > 0.01f)
+                    shotDir = to.normalized;
+            }
             float spd = BulletSpeed(g);
             for (int i = 0; i < pellets; i++)
             {
-                Vector3 dir = eye.forward;
+                Vector3 dir = shotDir;
                 if (spread > 0.0004f)
                 {
                     dir += eye.right * UnityEngine.Random.Range(-spread, spread);
                     dir += eye.up * UnityEngine.Random.Range(-spread, spread);
                     dir.Normalize();
                 }
+                Vector3 spawn = origin;
+                if (!tsfGun)
+                    spawn = origin + dir * (g.Fire == 4 ? 0.55f : 0.12f);
                 if (g.Fire == 4)
-                    SpawnBolt(origin + dir * 0.55f, dir * spd, g);
+                    SpawnBolt(spawn, dir * spd, g);
                 else
-                    SpawnSlug(origin + dir * 0.12f, dir, spd, g);
+                    SpawnSlug(spawn, dir, spd, g, guide);
             }
             Status = Mag[g.Id].ToString() + " / " + PoolOf(g).ToString();
         }
 
         private static void SpawnSlug(Vector3 pos, Vector3 dir, float speed, GaGun g)
+        {
+            SpawnSlug(pos, dir, speed, g, null);
+        }
+
+        private static void SpawnSlug(Vector3 pos, Vector3 dir, float speed, GaGun g, Unit guide)
         {
             if (dir.sqrMagnitude < 0.01f)
                 dir = Vector3.forward;
@@ -634,7 +995,10 @@ namespace GroundArsenal
                 || Ads >= 0.28f
                 || (_tracerN % 2) == 0;
             float len = 2.2f;
-            if (g != null && g.Family == 10)
+            bool tsfSlug = GaTsf.Owns() && g != null && g.Id == 49;
+            if (tsfSlug)
+                len = 0.48f;
+            else if (g != null && g.Family == 10)
                 len = 6.5f;
             else if (Ads >= 0.28f)
                 len = 5.8f;
@@ -651,8 +1015,9 @@ namespace GroundArsenal
             if (speed < 20f)
                 speed = 20f;
             b.Life = reach / speed + 0.35f;
-            if (b.Life > 8f)
-                b.Life = 8f;
+            float lifeCap = (g != null && g.Family == 11) ? 16f : 8f;
+            if (b.Life > lifeCap)
+                b.Life = lifeCap;
             if (b.Life < 0.4f)
                 b.Life = 0.4f;
             b.Dmg = g != null ? g.Damage : 12f;
@@ -662,9 +1027,22 @@ namespace GroundArsenal
             b.Rocket = false;
             b.Drop = g != null ? g.Drop : 0.7f;
             b.Flown = 0f;
-            b.PathGo = GaFx.MakePath(pos, col, bright || Ads >= 0.28f);
-            if (GaConfig.WantTracers() || Ads >= 0.28f)
+            _fxShotN++;
+            bool wantTrail = Ads >= 0.28f || (_fxShotN % 3) == 0;
+            if (wantTrail)
+                b.PathGo = GaFx.MakePath(pos, col, bright || Ads >= 0.28f);
+            if (!tsfSlug && wantTrail && (GaConfig.WantTracers() || Ads >= 0.28f))
                 GaFx.Tracer(pos, pos + dir * (bright ? 36f : 22f), col);
+            ArmLaser(b);
+            if (guide != null && !guide.disabled)
+            {
+                b.Homing = true;
+                b.Target = guide;
+                b.Turn = 7.4f;
+                b.Drop *= 0.08f;
+                if (b.Life < 12f)
+                    b.Life = 12f;
+            }
             Bolts.Add(b);
         }
 
@@ -676,9 +1054,7 @@ namespace GroundArsenal
             go.transform.position = p;
             go.transform.rotation = Quaternion.LookRotation(dir) * Quaternion.Euler(90f, 0f, 0f);
             go.transform.localScale = new Vector3(0.045f, 0.18f, 0.045f);
-            Collider col = go.GetComponent<Collider>();
-            if (col != null)
-                UnityEngine.Object.Destroy(col);
+            GaPhys.Strip(go);
             GaFx.DressBolt(go, g.Tracer);
             Bolt b = new Bolt();
             b.Go = go;
@@ -714,7 +1090,23 @@ namespace GroundArsenal
                 b.Target = LockTgt;
                 b.Turn = IsRbs(g) ? 18f : 6.2f;
             }
+            ArmLaser(b);
             Bolts.Add(b);
+        }
+
+        private static void ArmLaser(Bolt b)
+        {
+            if (b == null || !GaAtLaser.Homing)
+                return;
+            b.Laser = true;
+            b.Homing = true;
+            b.Aim = GaAtLaser.Aim;
+            b.Turn = b.Rocket ? 14f : 8.5f;
+            if (GaAtLaser.Tracked != null)
+                b.Target = GaAtLaser.Tracked;
+            if (b.Life < 14f)
+                b.Life = 14f;
+            b.Drop *= 0.18f;
         }
 
         private static void TickBolts(float dt)
@@ -803,13 +1195,14 @@ namespace GroundArsenal
 
         internal static float PierceHp(GaGun g)
         {
+            float mul = GaClass.DmgMul(GaClass.Picked);
             if (g == null)
-                return 4f;
+                return 4f * mul;
             if (g.Kind == "HEAT")
-                return 40f + g.Pen * 3.1f;
+                return (40f + g.Pen * 3.1f) * mul;
             if (g.Kind == "HE")
-                return 20f + g.Pen * 2.2f;
-            return 2.0f + g.Pen * 0.95f;
+                return (20f + g.Pen * 2.2f) * mul;
+            return (2.0f + g.Pen * 0.95f) * mul;
         }
 
         internal static float BlastHp(GaGun g)
@@ -838,17 +1231,18 @@ namespace GroundArsenal
             bool vehicle = false;
             try
             {
-                if (hitXf.GetComponentInParent<GaPawn>() != null
-                    || hitXf.GetComponentInParent<PilotDismounted>() != null)
+                if (GaPhys.Pawn(hitXf) != null || GaPhys.Bot(hitXf) != null)
                     return;
-                else if (hitXf.GetComponentInParent<Aircraft>() != null)
+                Unit u = hitXf.GetComponentInParent<Unit>();
+                if (u is Aircraft)
                     air = true;
+                else if (u is Building)
+                    building = true;
+                else if (u is GroundVehicle || u is Ship)
+                    vehicle = true;
                 else if (hitXf.GetComponentInParent<Building>() != null
                     || hitXf.GetComponentInParent<MapBuilding>() != null)
                     building = true;
-                else if (hitXf.GetComponentInParent<GroundVehicle>() != null
-                    || hitXf.GetComponentInParent<Ship>() != null)
-                    vehicle = true;
             }
             catch { }
             float mul = 1f;
@@ -950,12 +1344,67 @@ namespace GroundArsenal
                 LockTgt = best;
                 LockAmt = 0f;
             }
-            bool hold = Input.GetMouseButton(1);
+            bool hold = GaVr.Ads();
             float fill = IsRbs(g) ? 0.55f : 0.38f;
             if (hold)
                 LockAmt = Mathf.MoveTowards(LockAmt, 1f, dt / fill);
             else
                 LockAmt = Mathf.MoveTowards(LockAmt, 0f, dt * 0.42f);
+        }
+
+        private static Unit FindPipTarget(Transform eye, float cone, float maxD)
+        {
+            if (eye == null)
+                return null;
+            Camera cam = GaPerfFrameGate.Cam();
+            if (cam == null)
+                cam = eye.GetComponent<Camera>();
+            Unit best = null;
+            float bestScore = float.MaxValue;
+            FactionHQ hq = GaPerfFrameGate.Hq();
+            Unit linked = GaMode.LinkedUnit();
+            List<Unit> all = GaPerfFrameGate.PlotUnits();
+            if (all == null)
+                return null;
+            Vector3 origin = eye.position;
+            Vector3 fwd = eye.forward;
+            for (int i = 0; i < all.Count; i++)
+            {
+                Unit u = all[i];
+                if (u == null || u.disabled)
+                    continue;
+                if (linked != null && object.ReferenceEquals(u, linked))
+                    continue;
+                if (IsFriendly(u, hq))
+                    continue;
+                if (!(u is Aircraft) && !(u is GroundVehicle) && !(u is Ship))
+                    continue;
+                Vector3 aim = AimPoint(u);
+                Vector3 to = aim - origin;
+                float dist = to.magnitude;
+                if (dist < 12f || dist > maxD)
+                    continue;
+                float ang = Vector3.Angle(fwd, to);
+                if (ang > cone)
+                    continue;
+                if (cam != null)
+                {
+                    Vector3 vp = cam.WorldToViewportPoint(aim);
+                    if (vp.z < 1.2f)
+                        continue;
+                    float dx = vp.x - 0.5f;
+                    float dy = vp.y - 0.52f;
+                    if (dx * dx + dy * dy > 0.0042f)
+                        continue;
+                }
+                float score = ang * 80f + dist * 0.0004f;
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    best = u;
+                }
+            }
+            return best;
         }
 
         private static Unit FindLockTarget(Transform eye, GaGun g)
@@ -967,13 +1416,9 @@ namespace GroundArsenal
             float bestAng = cone;
             float minD = IsRbs(g) ? 12f : 8f;
             float maxD = IsRbs(g) ? 12000f : 2500f;
-            FactionHQ hq = null;
-            try { GameManager.GetLocalHQ(out hq); }
-            catch { }
+            FactionHQ hq = GaPerfFrameGate.Hq();
             Unit linked = GaMode.LinkedUnit();
-            List<Unit> all = null;
-            try { all = UnitRegistry.allUnits; }
-            catch { }
+            List<Unit> all = GaPerfFrameGate.PlotUnits();
             if (all == null)
                 return null;
             Vector3 origin = eye.position;
@@ -1043,15 +1488,25 @@ namespace GroundArsenal
         {
             if (b == null || !b.Homing)
                 return;
-            if (b.Target == null || b.Target.disabled)
-            {
-                b.Homing = false;
-                return;
-            }
             if (b.Go == null)
                 return;
             Vector3 pos = b.Go.transform.position;
-            Vector3 aim = AimPoint(b.Target) + UnitVel(b.Target) * LeadTime(b, pos);
+            Vector3 aim;
+            if (b.Laser)
+            {
+                if (GaAtLaser.Homing)
+                    b.Aim = GaAtLaser.Aim;
+                aim = b.Aim;
+            }
+            else
+            {
+                if (b.Target == null || b.Target.disabled)
+                {
+                    b.Homing = false;
+                    return;
+                }
+                aim = AimPoint(b.Target) + UnitVel(b.Target) * LeadTime(b, pos);
+            }
             Vector3 to = aim - pos;
             if (to.sqrMagnitude < 0.01f)
                 return;
@@ -1078,7 +1533,16 @@ namespace GroundArsenal
 
         private static bool Proximate(Bolt b, Vector3 np)
         {
-            if (b == null || !b.Homing || b.Target == null || b.Target.disabled)
+            if (b == null || !b.Homing)
+                return false;
+            if (b.Laser)
+            {
+                if (!b.Rocket)
+                    return false;
+                float fuse = 12f;
+                return (np - b.Aim).sqrMagnitude <= fuse * fuse;
+            }
+            if (b.Target == null || b.Target.disabled)
                 return false;
             float near = IsRbs(b.Gun) ? 16f : 5.5f;
             Vector3 aim = AimPoint(b.Target);
@@ -1097,14 +1561,7 @@ namespace GroundArsenal
             catch { }
             ScaleVsTarget(ref pierce, ref blast, ref impact, g, xf);
             GaVehicleArmor.RememberInfantryShot(PenGrade(g), incoming, IsPureKe(g));
-            PersistentID dealer = PersistentID.None;
-            try
-            {
-                Aircraft ac;
-                if (GameManager.GetLocalAircraft(out ac) && ac != null)
-                    dealer = ac.persistentID;
-            }
-            catch { }
+            PersistentID dealer = GaMode.DealerId();
             UnitPart[] parts = null;
             try { parts = u.GetComponentsInChildren<UnitPart>(); }
             catch { }
@@ -1132,6 +1589,10 @@ namespace GroundArsenal
         {
             AssistOn = false;
             if (eye == null)
+                return;
+            if (GaPerfFrameGate.SkipPolish())
+                return;
+            if (GaVr.Fire())
                 return;
             GaGun g = Current;
             if (g == null || !g.HipAssist)
@@ -1168,13 +1629,9 @@ namespace GroundArsenal
                 return false;
             Unit best = null;
             float bestScore = float.MaxValue;
-            FactionHQ hq = null;
-            try { GameManager.GetLocalHQ(out hq); }
-            catch { }
+            FactionHQ hq = GaPerfFrameGate.Hq();
             Unit linked = GaMode.LinkedUnit();
-            List<Unit> all = null;
-            try { all = UnitRegistry.allUnits; }
-            catch { }
+            List<Unit> all = GaPerfFrameGate.PlotUnits();
             if (all == null)
                 return false;
             Vector3 origin = eye.position;
@@ -1278,14 +1735,7 @@ namespace GroundArsenal
             catch { }
             ScaleVsTarget(ref pierce, ref blast, ref impact, g, xf);
             GaVehicleArmor.RememberInfantryShot(PenGrade(g), incoming, IsPureKe(g));
-            PersistentID dealer = PersistentID.None;
-            try
-            {
-                Aircraft ac;
-                if (GameManager.GetLocalAircraft(out ac) && ac != null)
-                    dealer = ac.persistentID;
-            }
-            catch { }
+            PersistentID dealer = GaMode.DealerId();
             UnitPart part = null;
             try { part = hit.collider.GetComponentInParent<UnitPart>(); }
             catch { }
@@ -1300,12 +1750,19 @@ namespace GroundArsenal
             catch { }
             if (dmg != null)
             {
+                GaDropBot bot = GaPhys.Bot(hit.collider);
+                if (bot != null)
+                    bot.HurtByPlayer = true;
                 try { dmg.TakeDamage(pierce, blast, 1f, 0f, impact, dealer); }
                 catch
                 {
                     try { dmg.ApplyDamage(pierce, blast, 0f, impact); }
                     catch { }
                 }
+                if (bot != null)
+                    GaFps.HitMarker(bot.Hp <= 0f || bot.Downed);
+                else
+                    GaFps.HitMarker(false);
                 return;
             }
             Unit u = null;
@@ -1328,9 +1785,9 @@ namespace GroundArsenal
             hit = default(RaycastHit);
             if (range < 0.05f)
                 return false;
-            RaycastHit[] all = Physics.RaycastAll(origin, dir, range,
-                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-            return PickHit(all, out hit);
+            int n = Physics.RaycastNonAlloc(origin, dir, _rayBuf, range,
+                GaPhys.WorldMask, QueryTriggerInteraction.Ignore);
+            return PickHitNonAlloc(n, out hit);
         }
 
         private static bool WeaponLine(Vector3 a, Vector3 b, out RaycastHit hit)
@@ -1340,9 +1797,35 @@ namespace GroundArsenal
             float range = d.magnitude;
             if (range < 0.01f)
                 return false;
-            RaycastHit[] all = Physics.RaycastAll(a, d / range, range,
-                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-            return PickHit(all, out hit);
+            int n = Physics.RaycastNonAlloc(a, d / range, _rayBuf, range,
+                GaPhys.WorldMask, QueryTriggerInteraction.Ignore);
+            return PickHitNonAlloc(n, out hit);
+        }
+
+        private static bool PickHitNonAlloc(int count, out RaycastHit hit)
+        {
+            hit = default(RaycastHit);
+            if (count <= 0) return false;
+            Transform pawn = GaMode.PawnRoot;
+            float best = float.MaxValue;
+            bool ok = false;
+            int lim = count;
+            if (lim > _rayBuf.Length) lim = _rayBuf.Length;
+            for (int i = 0; i < lim; i++)
+            {
+                Collider col = _rayBuf[i].collider;
+                if (col == null) continue;
+                Transform t = col.transform;
+                if (pawn != null && (t == pawn || t.IsChildOf(pawn))) continue;
+                if (GaDropSquad.SkipCollider(col)) continue;
+                if (_rayBuf[i].distance < best)
+                {
+                    best = _rayBuf[i].distance;
+                    hit = _rayBuf[i];
+                    ok = true;
+                }
+            }
+            return ok;
         }
 
         private static bool PickHit(RaycastHit[] all, out RaycastHit hit)
@@ -1360,6 +1843,8 @@ namespace GroundArsenal
                     continue;
                 Transform t = col.transform;
                 if (pawn != null && (t == pawn || t.IsChildOf(pawn)))
+                    continue;
+                if (GaDropSquad.SkipCollider(col))
                     continue;
                 if (all[i].distance < 1.15f)
                 {
@@ -1397,7 +1882,10 @@ namespace GroundArsenal
             _burstLeft = 0;
             AssistOn = false;
             ClearLock();
-            GaView.Attach(eye);
+            if (GaClass.Picked == GaKitId.Tsf)
+                GaView.Destroy();
+            else
+                GaView.Attach(eye);
         }
 
         internal static void DestroyViews()

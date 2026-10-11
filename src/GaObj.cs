@@ -13,6 +13,11 @@ namespace GroundArsenal
     {
         internal static Mesh Load(string path)
         {
+            return Load(path, true);
+        }
+
+        internal static Mesh Load(string path, bool recenter)
+        {
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 return null;
             string[] lines = File.ReadAllLines(path, Encoding.UTF8);
@@ -95,16 +100,19 @@ namespace GroundArsenal
             if (!anyNrm)
                 mesh.RecalculateNormals();
             mesh.RecalculateBounds();
-            Vector3 c = mesh.bounds.center;
-            if (c.sqrMagnitude > 0.0001f)
+            if (recenter)
             {
-                Vector3[] verts = mesh.vertices;
-                for (int i = 0; i < verts.Length; i++)
-                    verts[i] -= c;
-                mesh.vertices = verts;
-                mesh.RecalculateBounds();
-                if (!anyNrm)
-                    mesh.RecalculateNormals();
+                Vector3 c = mesh.bounds.center;
+                if (c.sqrMagnitude > 0.0001f)
+                {
+                    Vector3[] verts = mesh.vertices;
+                    for (int i = 0; i < verts.Length; i++)
+                        verts[i] -= c;
+                    mesh.vertices = verts;
+                    mesh.RecalculateBounds();
+                    if (!anyNrm)
+                        mesh.RecalculateNormals();
+                }
             }
             if (!anyUv)
             {

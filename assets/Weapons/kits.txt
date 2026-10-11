@@ -49,3 +49,5 @@
 46 q_SubmachineGun_5.obj ak_mag.obj ak_bolt.obj - 2 - weaponIcon_q_SubmachineGun_5.png
 47 rbs70.obj - - - 5 - weaponIcon_rbs70.png
 48 rev_body.obj rev_cyl.obj - - 3 - weaponIcon_rev_body.png
+49 ws16.obj - - - 5 - -
+50 type77.obj - - - 5 - -
