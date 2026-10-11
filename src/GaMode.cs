@@ -198,18 +198,6 @@ namespace GroundArsenal
                     Shutdown();
                 return;
             }
-            if (GaShop.PendingFly != null)
-            {
-                Aircraft fly = GaShop.PendingFly;
-                GaShop.PendingFly = null;
-                if (Active)
-                    Exit(true);
-                ShowAircraftHud(fly);
-                try { CameraStateManager.cameraMode = CameraMode.cockpit; }
-                catch { }
-                try { GameManager.flightControlsEnabled = true; }
-                catch { }
-            }
             if (BranchQueued)
             {
                 BranchQueued = false;
@@ -429,13 +417,20 @@ namespace GroundArsenal
                 return;
 
             if (GaRide.Busy)
+            {
+                GaTsf.ParkView();
                 GaRide.ApplyCam(mgr);
+            }
             else if (GaVr.Active)
+            {
+                GaTsf.ParkView();
                 GaVr.Follow(cam, _eye);
+            }
             else if (GaTsf.Owns())
                 GaTsf.ApplyCam(cam);
             else
             {
+                GaTsf.ParkView();
                 cam.transform.position = _eye.position;
                 cam.transform.rotation = _eye.rotation;
             }
@@ -523,12 +518,6 @@ namespace GroundArsenal
             catch { local = false; }
             if (!local)
                 return;
-            if (GaShop.ArmFly)
-            {
-                GaShop.ArmFly = false;
-                GaShop.PendingFly = ac;
-                return;
-            }
             if (GaAirLift.Waiting)
             {
                 GaAirLift.Attach(ac);
@@ -559,8 +548,6 @@ namespace GroundArsenal
                 KickCockpitCam();
                 return;
             }
-            if (GaShop.ArmFly || GaShop.PendingFly != null)
-                return;
             ClaimParked(ac);
             Player p = null;
             try { GameManager.GetLocalPlayer(out p); }
@@ -578,11 +565,19 @@ namespace GroundArsenal
         {
             if (!Active || mgr == null || state == null)
                 return false;
+            if (GaRide.Busy)
+            {
+                if (state == mgr.freeState)
+                    return false;
+                return true;
+            }
             return state == mgr.cockpitState || state == mgr.chaseState;
         }
 
         internal static void HideAircraftHud()
         {
+            if (GaIff.Hosting)
+                return;
             try { FlightHud.EnableCanvas(false); }
             catch { }
             try
@@ -1336,6 +1331,7 @@ namespace GroundArsenal
                 _deadUntil = Time.unscaledTime + 2.4f;
                 GaHud.CloseMenus();
                 GaHud.OnDeath();
+                GaTsf.OnDeath();
                 if (_cc != null)
                     _cc.enabled = false;
                 GaCombat.ClearBolts();
@@ -1349,6 +1345,7 @@ namespace GroundArsenal
                 Hp = 0f;
                 _deadUntil = Time.unscaledTime + BleedSec;
                 GaHud.CloseMenus();
+                GaTsf.OnDown();
                 if (_cc != null)
                     _cc.enabled = false;
                 GaRadio.PlayerDown();
@@ -1361,6 +1358,7 @@ namespace GroundArsenal
                 DeathCause = "BLED OUT";
             GaHud.CloseMenus();
             GaHud.OnDeath();
+            GaTsf.OnDeath();
             if (_cc != null)
                 _cc.enabled = false;
             GaCombat.ClearBolts();

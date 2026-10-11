@@ -263,6 +263,8 @@ namespace GroundArsenal
         [HarmonyPriority(Priority.First)]
         private static bool Prefix(bool enable)
         {
+            if (GaIff.Hosting)
+                return true;
             if (GaMode.Active && enable)
                 return false;
             return true;
@@ -344,7 +346,33 @@ namespace GroundArsenal
         [HarmonyPriority(Priority.First)]
         private static bool Prefix()
         {
+            if (GaIff.Hosting)
+                return true;
             return !GaMode.Active;
+        }
+    }
+
+    [HarmonyPatch(typeof(Aircraft), "SetupLocalPlayerAndUI")]
+    internal static class GaPatch_SkipCockpitOnBuy
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix()
+        {
+            if (GaAirLift.Waiting || GaAirLift.Flying)
+                return true;
+            return !GaMode.Active;
+        }
+    }
+
+    [HarmonyPatch(typeof(HUDUnitMarker), "UpdateHidden")]
+    internal static class GaPatch_IffGear
+    {
+        [HarmonyPrefix]
+        private static void Prefix(ref bool gearExtended)
+        {
+            if (GaRide.Busy)
+                gearExtended = false;
         }
     }
 
@@ -425,14 +453,12 @@ namespace GroundArsenal
     [HarmonyPatch(typeof(CombatHUD), "LateUpdate")]
     internal static class GaPatch_CombatHudLate
     {
-        [HarmonyPrefix]
-        [HarmonyPriority(Priority.First)]
-        private static bool Prefix(CombatHUD __instance)
+        [HarmonyPostfix]
+        private static void Postfix(CombatHUD __instance)
         {
             if (!GaRide.Busy)
-                return true;
+                return;
             GaIff.HudLate(__instance);
-            return false;
         }
     }
 
@@ -501,6 +527,12 @@ namespace GroundArsenal
         {
             return !GaRide.Helming(__instance);
         }
+
+        [HarmonyPostfix]
+        private static void Postfix(ShipAI __instance)
+        {
+            GaRide.PushShipInputs(__instance);
+        }
     }
 
     [HarmonyPatch(typeof(LandingCraftAI), "Update")]
@@ -511,6 +543,12 @@ namespace GroundArsenal
         private static bool Prefix(LandingCraftAI __instance)
         {
             return !GaRide.Helming(__instance);
+        }
+
+        [HarmonyPostfix]
+        private static void Postfix(LandingCraftAI __instance)
+        {
+            GaRide.PushShipInputs(__instance);
         }
     }
 

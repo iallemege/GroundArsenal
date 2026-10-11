@@ -16,6 +16,10 @@ namespace GroundArsenal
         internal ushort NetId;
         internal bool Puppet;
         internal float SeenAt;
+        internal Unit RideHost;
+        internal int RideSeat;
+        internal int RideGun = -1;
+        internal float RideNextFire;
 
         private CharacterController _cc;
         private Vector3 _vel;
@@ -226,10 +230,57 @@ namespace GroundArsenal
                 TickPuppet(dt, lod);
                 return;
             }
+            if (RideHost != null)
+            {
+                TickRide(dt, lod);
+                return;
+            }
             if (_falling)
                 Fall(dt);
             else
                 Fight(dt, lod);
+        }
+
+        internal void Board(Unit host, int seat, int gun)
+        {
+            RideHost = host;
+            RideSeat = seat;
+            RideGun = gun;
+            RideNextFire = 0f;
+            if (_cc != null)
+                _cc.enabled = false;
+            ShowGun(false);
+        }
+
+        internal void ClearRide()
+        {
+            RideHost = null;
+            RideSeat = 0;
+            RideGun = -1;
+            if (_cc != null)
+                _cc.enabled = true;
+            if (!Downed)
+                ShowGun(true);
+        }
+
+        private void TickRide(float dt, int lod)
+        {
+            if (RideHost == null || RideHost.disabled || !GaRide.Busy
+                || !object.ReferenceEquals(RideHost, GaRide.Host))
+            {
+                ClearRide();
+                if (!_falling)
+                    Fight(dt, lod);
+                return;
+            }
+            GaRide.StickBot(this);
+            if (lod < 2 && Kit != GaKitId.Tsf)
+            {
+                if (!GaBody.Has(transform))
+                    GaBody.Attach(transform, Friendly);
+                GaBody.Tick(transform, 0f, false, true);
+            }
+            ShowGun(false);
         }
 
         private void TickPuppet(float dt, int lod)
@@ -894,6 +945,7 @@ namespace GroundArsenal
                 GaRadio.ConfirmKill();
             Downed = true;
             _downUntil = Time.unscaledTime + 22f;
+            ClearRide();
             GaBody.Tick(transform, 0f, true);
             ShowGun(false);
         }

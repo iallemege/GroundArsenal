@@ -691,7 +691,7 @@ namespace GroundArsenal
             }
             if (GaForce.Kind == GaForceKind.Land)
                 return "T  board vehicle   H  buy vehicle   V  radio";
-            return "T  board   H  vehicle   B  aircraft   L  3rd";
+            return "T  board   H  vehicle   B  aircraft   L orbit";
         }
 
         private static void DrawMagRow(float x, float y, GaGun g)

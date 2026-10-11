@@ -35,15 +35,12 @@ namespace GroundArsenal
         private static Mesh _bodyMesh;
         private static Mesh _cannonMesh;
         private static Mesh _bladeMesh;
-        private static Mesh _armLMesh;
-        private static Mesh _armRMesh;
         private static Vector3 _cannonMuzzleLocal = new Vector3(0f, 0f, 2.7f);
         private static bool _tried;
         private static GUIStyle _hud;
         private static GUIStyle _hudSm;
         private static Texture2D _ring;
         private static bool _hudReady;
-        private static int _holdKind = -1;
 
         internal static bool Owns()
         {
@@ -68,9 +65,35 @@ namespace GroundArsenal
             _hover = false;
             _lastWish = Vector3.zero;
             _ctrlTapAt = -10f;
-            _holdKind = -1;
             _pawn = null;
             DropPlayerRig();
+        }
+
+        internal static void OnDown()
+        {
+            ParkView();
+        }
+
+        internal static void OnDeath()
+        {
+            Jumping = false;
+            _hover = false;
+            DropPlayerRig();
+        }
+
+        internal static void ParkView()
+        {
+            if (_rig == null || !_rig.Player || _rig.View == null)
+                return;
+            Transform v = _rig.View.transform;
+            Transform want = _rig.Root != null ? _rig.Root.transform : null;
+            if (v.parent != want)
+            {
+                try { v.SetParent(want, false); }
+                catch { }
+            }
+            if (_rig.View.activeSelf)
+                _rig.View.SetActive(false);
         }
 
         internal static void OnSpawn(Transform pawn, CharacterController cc, Transform eye)
@@ -557,11 +580,6 @@ namespace GroundArsenal
                     : new Vector3(-0.35f, 0f, 0.45f);
                 rig.Blade.SetActive(false);
             }
-            if (player)
-            {
-                rig.LHand = MakeArm("LHand", _armLMesh, rig.Turret);
-                rig.RHand = MakeArm("RHand", _armRMesh, rig.Turret);
-            }
             Transform cap = host.Find("Body");
             if (cap != null)
             {
@@ -571,16 +589,6 @@ namespace GroundArsenal
                 cap.gameObject.SetActive(false);
             }
             return rig;
-        }
-
-        private static GameObject MakeArm(string name, Mesh mesh, Transform parent)
-        {
-            if (mesh == null || parent == null)
-                return null;
-            GameObject go = MakeMesh(name, mesh, parent, BodyMat());
-            float s = Fit(mesh, 0.74f);
-            go.transform.localScale = Vector3.one * s;
-            return go;
         }
 
         private static void Pose(float dt)
@@ -659,33 +667,6 @@ namespace GroundArsenal
                 _rig.Cannon.SetActive(!blade);
             if (_rig.Blade != null)
                 _rig.Blade.SetActive(blade);
-            int kind = blade ? 1 : 0;
-            if (kind == _holdKind)
-                return;
-            _holdKind = kind;
-            Vector3 lElbow = new Vector3(-0.28f, -0.20f, 0.10f);
-            Vector3 rElbow = new Vector3(0.30f, -0.18f, 0.08f);
-            if (blade)
-            {
-                PlaceArm(_rig.LHand, new Vector3(0.18f, -0.16f, 0.42f), lElbow);
-                PlaceArm(_rig.RHand, new Vector3(0.34f, -0.18f, 0.32f), rElbow);
-            }
-            else
-            {
-                PlaceArm(_rig.LHand, new Vector3(0.02f, -0.15f, 0.62f), lElbow);
-                PlaceArm(_rig.RHand, new Vector3(0.24f, -0.17f, 0.38f), rElbow);
-            }
-        }
-
-        private static void PlaceArm(GameObject hand, Vector3 grip, Vector3 elbow)
-        {
-            if (hand == null)
-                return;
-            hand.transform.localPosition = grip;
-            Vector3 along = grip - elbow;
-            if (along.sqrMagnitude < 0.0004f)
-                along = Vector3.forward;
-            hand.transform.localRotation = Quaternion.LookRotation(along.normalized, Vector3.up);
         }
 
         private static void PlaceViewmodel(Camera cam)
@@ -829,8 +810,6 @@ namespace GroundArsenal
             _bodyMesh = GaObj.Load(System.IO.Path.Combine(dir, "f4.obj"), false);
             _cannonMesh = GaObj.Load(System.IO.Path.Combine(dir, "ws16.obj"), true);
             _bladeMesh = GaObj.Load(System.IO.Path.Combine(dir, "type77.obj"), true);
-            _armLMesh = GaObj.Load(System.IO.Path.Combine(dir, "f4_arm_l.obj"), false);
-            _armRMesh = GaObj.Load(System.IO.Path.Combine(dir, "f4_arm_r.obj"), false);
             _cannonMuzzleLocal = MuzzleLocalOf(_cannonMesh);
         }
 
@@ -954,11 +933,32 @@ namespace GroundArsenal
 
         private static void DropPlayerRig()
         {
-            if (_rig != null && _rig.Root != null)
-                Object.Destroy(_rig.Root);
-            if (_rig != null)
-                Object.Destroy(_rig);
+            if (_rig == null)
+                return;
+            DropGo(_rig.Cannon);
+            DropGo(_rig.Blade);
+            DropGo(_rig.HullCannon);
+            DropGo(_rig.HullBlade);
+            if (_rig.Turret != null)
+                DropGo(_rig.Turret.gameObject);
+            DropGo(_rig.View);
+            DropGo(_rig.Hull);
+            DropGo(_rig.Root);
+            Object.Destroy(_rig);
             _rig = null;
+        }
+
+        private static void DropGo(GameObject go)
+        {
+            if (go == null)
+                return;
+            try
+            {
+                if (go.transform != null)
+                    go.transform.SetParent(null, false);
+            }
+            catch { }
+            Object.Destroy(go);
         }
     }
 
@@ -975,7 +975,5 @@ namespace GroundArsenal
         internal GameObject HullBlade;
         internal GameObject Cannon;
         internal GameObject Blade;
-        internal GameObject LHand;
-        internal GameObject RHand;
     }
 }

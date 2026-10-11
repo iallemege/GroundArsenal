@@ -11,7 +11,7 @@ namespace GroundArsenal
     {
         internal const string GUID = "com.iallemege.groundarsenal";
         internal const string Name = "Ground Arsenal";
-        internal const string Version = "1.0.0";
+        internal const string Version = "1.0.4";
     }
 
     [DefaultExecutionOrder(-2000)]

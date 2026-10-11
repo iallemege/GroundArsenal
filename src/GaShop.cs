@@ -8,8 +8,6 @@ namespace GroundArsenal
     internal static class GaShop
     {
         internal static bool Open;
-        internal static bool ArmFly;
-        internal static Aircraft PendingFly;
 
         private static readonly List<AircraftDefinition> Planes = new List<AircraftDefinition>(24);
         private static Airbase _base;
@@ -95,8 +93,6 @@ namespace GroundArsenal
         internal static void Clear()
         {
             Open = false;
-            PendingFly = null;
-            ArmFly = false;
             Planes.Clear();
             _base = null;
         }
@@ -198,16 +194,15 @@ namespace GroundArsenal
                     GaMode.Deny("Hangar busy.", "机库不可用。");
                     return;
                 }
-                GaShop.ArmFly = true;
                 Airbase.TrySpawnResult result = _base.TrySpawnAircraft(player, def, new LiveryKey(0), new Loadout(), 0.85f);
                 if (!result.Allowed)
                 {
-                    GaShop.ArmFly = false;
                     GaMode.Deny("Spawn refused.", "无法生成飞机。");
                     return;
                 }
                 Close();
-                GaMode.Deny("Aircraft spawning.", "飞机正在出动。");
+                GaMode.Deny("Aircraft marked. Walk up, T to board.",
+                    "飞机已出动。走近按 T 登机。");
             }
             catch (System.Exception ex)
             {

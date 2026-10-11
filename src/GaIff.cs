@@ -1,9 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
-using Rewired;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace GroundArsenal
 {
@@ -17,14 +15,27 @@ namespace GroundArsenal
         private static Aircraft _borrow;
         private static List<Unit> _locks;
         private static float _nextFill;
-        private static MethodInfo _updateMarkers;
         private static FieldInfo _targetList;
         private static FieldInfo _currentStation;
-        private static FieldInfo _markers;
         private static bool _on;
+
+        internal static bool Hosting
+        {
+            get { return _on && GaRide.Busy; }
+        }
 
         internal static Unit Primary()
         {
+            if (_hud != null)
+            {
+                try
+                {
+                    List<Unit> list = _hud.GetTargetList();
+                    if (list != null && list.Count > 0 && list[0] != null && !list[0].disabled)
+                        return list[0];
+                }
+                catch { }
+            }
             if (_locks != null && _locks.Count > 0 && _locks[0] != null && !_locks[0].disabled)
                 return _locks[0];
             return null;
@@ -39,21 +50,43 @@ namespace GroundArsenal
             _borrow = PickBorrow();
             if (_borrow == null)
                 return;
-            try { _hud.aircraft = _borrow; }
-            catch { return; }
-            _locks = new List<Unit>(8);
+            _on = true;
+            try { FlightHud.EnableCanvas(true); }
+            catch { }
+            bool attached = false;
+            try
+            {
+                _hud.SetAircraft(_borrow);
+                attached = true;
+            }
+            catch { attached = false; }
+            if (!attached)
+            {
+                try { _hud.aircraft = _borrow; }
+                catch
+                {
+                    _on = false;
+                    return;
+                }
+            }
+            _locks = null;
+            try { _locks = _hud.GetTargetList(); }
+            catch { _locks = null; }
+            if (_locks == null)
+                _locks = new List<Unit>(8);
             Bind();
             try { TargetList().SetValue(_hud, _locks); }
             catch { }
             EnableLayer(true);
             FillMarkers(host);
-            _on = true;
+            RefreshStation();
             _nextFill = Time.unscaledTime + 0.8f;
         }
 
         internal static void Stop()
         {
             _on = false;
+            EnableLayer(false);
             if (_hud != null)
             {
                 try { _hud.ClearIcons(); }
@@ -61,13 +94,23 @@ namespace GroundArsenal
                 try
                 {
                     if (object.ReferenceEquals(_hud.aircraft, _borrow))
-                        _hud.aircraft = null;
+                        _hud.RemoveAircraft();
                 }
                 catch { }
             }
+            try { FlightHud.EnableCanvas(false); }
+            catch { }
             _hud = null;
             _borrow = null;
             _locks = null;
+        }
+
+        internal static void RefreshStation()
+        {
+            if (!_on || _hud == null)
+                return;
+            try { _hud.ShowWeaponStation(GaRide.CurrentStation()); }
+            catch { }
         }
 
         internal static void HudLate(CombatHUD hud)
@@ -79,107 +122,25 @@ namespace GroundArsenal
                 _borrow = PickBorrow();
                 if (_borrow == null)
                     return;
+                try { hud.SetAircraft(_borrow); }
+                catch
+                {
+                    try { hud.aircraft = _borrow; }
+                    catch { return; }
+                }
+            }
+            else if (!object.ReferenceEquals(hud.aircraft, _borrow))
+            {
                 try { hud.aircraft = _borrow; }
-                catch { return; }
+                catch { }
             }
             if (Time.unscaledTime >= _nextFill)
             {
                 _nextFill = Time.unscaledTime + 0.8f;
                 FillMarkers(GaRide.Host);
+                EnableLayer(true);
             }
             PushStation(hud);
-            MethodInfo um = UpdateMarkersFn();
-            if (um != null)
-            {
-                try { um.Invoke(hud, null); }
-                catch { }
-            }
-            PollSelect(hud);
-        }
-
-        private static void PollSelect(CombatHUD hud)
-        {
-            if (GaHud.BlocksLook)
-                return;
-            Rewired.Player inp = null;
-            try { inp = GameManager.playerInput; }
-            catch { inp = null; }
-            if (inp == null)
-                return;
-            try
-            {
-                if (inp.GetButtonTimedPressUp("Deselect", 0f, PlayerSettings.clickDelay)
-                    || inp.GetButtonDown("Deselect"))
-                {
-                    DropLast();
-                    return;
-                }
-            }
-            catch { }
-            try
-            {
-                if (inp.GetButtonTimedPressUp("Select", 0f, PlayerSettings.clickDelay))
-                    TrySelect(hud, false);
-                else if (inp.GetButtonTimedPressDown("Select", PlayerSettings.pressDelay)
-                    && !DynamicMap.mapMaximized)
-                    TrySelect(hud, true);
-            }
-            catch { }
-        }
-
-        private static void TrySelect(CombatHUD hud, bool paint)
-        {
-            if (hud == null || hud.targetDesignator == null)
-                return;
-            List<HUDUnitMarker> marks = Markers(hud);
-            if (marks == null || marks.Count == 0)
-                return;
-            Vector3 des = hud.targetDesignator.transform.position;
-            List<HUDUnitMarker> hit = new List<HUDUnitMarker>(4);
-            for (int i = 0; i < marks.Count; i++)
-            {
-                HUDUnitMarker m = marks[i];
-                if (m == null || m.image == null || !m.image.enabled || m.unit == null)
-                    continue;
-                if (m.unit.disabled)
-                    continue;
-                if (!paint && m.selected)
-                    continue;
-                try
-                {
-                    TargetListSelector sel = SceneSingleton<TargetListSelector>.i;
-                    if (sel != null && sel.CheckExclusions(m.unit))
-                        continue;
-                }
-                catch { }
-                if (!FastMath.InRange(des, m.image.transform.position, 100f))
-                    continue;
-                hit.Add(m);
-            }
-            if (hit.Count == 0)
-                return;
-            if (paint)
-            {
-                for (int i = 0; i < hit.Count; i++)
-                    LockMark(hud, hit[i]);
-                return;
-            }
-            HUDUnitMarker best = hit[0];
-            float bestD = float.MaxValue;
-            for (int i = 0; i < hit.Count; i++)
-            {
-                HUDUnitMarker m = hit[i];
-                float d = (m.image.transform.position - des).sqrMagnitude;
-                bool enemy = IsEnemy(m.unit);
-                if (enemy)
-                    d *= 0.15f;
-                if (d < bestD)
-                {
-                    bestD = d;
-                    best = m;
-                }
-            }
-            LockMark(hud, best);
         }
 
         internal static void DropLast()
@@ -372,26 +333,6 @@ namespace GroundArsenal
             return best;
         }
 
-        private static bool IsEnemy(Unit u)
-        {
-            if (u == null)
-                return false;
-            FactionHQ hq = GaPerfFrameGate.Hq();
-            if (hq == null)
-                return true;
-            try
-            {
-                FactionHQ other = u.NetworkHQ;
-                if (other == null)
-                    return true;
-                return !object.ReferenceEquals(other, hq);
-            }
-            catch
-            {
-                return true;
-            }
-        }
-
         private static CombatHUD Hud()
         {
             try { return SceneSingleton<CombatHUD>.i; }
@@ -400,20 +341,10 @@ namespace GroundArsenal
 
         private static void Bind()
         {
-            if (_updateMarkers == null)
-                _updateMarkers = AccessTools.Method(typeof(CombatHUD), "UpdateMarkers");
             if (_targetList == null)
                 _targetList = AccessTools.Field(typeof(CombatHUD), "targetList");
             if (_currentStation == null)
                 _currentStation = AccessTools.Field(typeof(CombatHUD), "currentWeaponStation");
-            if (_markers == null)
-                _markers = AccessTools.Field(typeof(CombatHUD), "markers");
-        }
-
-        private static MethodInfo UpdateMarkersFn()
-        {
-            Bind();
-            return _updateMarkers;
         }
 
         private static FieldInfo TargetList()
@@ -426,15 +357,6 @@ namespace GroundArsenal
         {
             Bind();
             return _currentStation;
-        }
-
-        private static List<HUDUnitMarker> Markers(CombatHUD hud)
-        {
-            Bind();
-            if (_markers == null || hud == null)
-                return null;
-            try { return _markers.GetValue(hud) as List<HUDUnitMarker>; }
-            catch { return null; }
         }
     }
 }

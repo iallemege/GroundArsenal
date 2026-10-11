@@ -138,6 +138,19 @@ namespace GroundArsenal
             FillEnemyGround();
         }
 
+        internal static void InviteTo(Unit host)
+        {
+            if (host == null)
+                return;
+            for (int i = 0; i < Bots.Count; i++)
+            {
+                GaDropBot b = Bots[i];
+                if (b == null || !b.Friendly || b.Downed || b.Hp <= 0f || b.Falling)
+                    continue;
+                GaRide.TryBoardBot(b);
+            }
+        }
+
         internal static void DespawnFriendlies()
         {
             for (int i = Bots.Count - 1; i >= 0; i--)

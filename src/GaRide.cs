@@ -25,11 +25,16 @@ namespace GroundArsenal
         private static FieldInfo _resetStationary;
         private static FieldInfo _anchored;
         private static FieldInfo _turretUnit;
+        private static FieldInfo _aiShip;
         private static MethodInfo _aimTurret;
         private static readonly List<Unit> _ride = new List<Unit>(32);
         private static float _nextRide;
         private static Unit _skipHost;
         private static float _skipUntil;
+        private static bool _orbit;
+        private static float _orbitToggleUntil;
+        private static readonly List<GaDropBot> _crew = new List<GaDropBot>(4);
+        private static float _nextInvite;
 
         internal static bool Busy
         {
@@ -39,6 +44,26 @@ namespace GroundArsenal
         internal static bool Driving
         {
             get { return Busy && Seat == 0 && CanHelm(_host); }
+        }
+
+        internal static bool Gunner
+        {
+            get { return Busy && Seat == 1; }
+        }
+
+        internal static bool Passenger
+        {
+            get { return Busy && Seat >= 2; }
+        }
+
+        internal static bool CanFire
+        {
+            get { return Busy && Seat < 2; }
+        }
+
+        internal static bool Orbiting
+        {
+            get { return Busy && _orbit; }
         }
 
         internal static GroundVehicle Vehicle
@@ -63,13 +88,20 @@ namespace GroundArsenal
 
         internal static bool Helming(ShipAI ai)
         {
-            if (!Driving || ai == null || _host == null)
+            if (!Busy || !CanHelm(_host) || ai == null || _host == null)
                 return false;
-            Ship ship = _host as Ship;
-            if (ship == null)
+            Ship want = _host as Ship;
+            if (want == null)
                 return false;
-            try { return object.ReferenceEquals(ai.GetComponent<Ship>(), ship); }
-            catch { return false; }
+            Ship have = ShipOf(ai);
+            return have != null && object.ReferenceEquals(have, want);
+        }
+
+        internal static void PushShipInputs(ShipAI ai)
+        {
+            if (!Helming(ai))
+                return;
+            DriveShip();
         }
 
         internal static void Tick()
@@ -85,17 +117,25 @@ namespace GroundArsenal
             TickWepKeys();
             TickAds();
             ReadDrive();
-            if (Driving && Vehicle != null)
+            if (Busy && Vehicle != null && CanHelm(Vehicle))
             {
                 KeepLoose();
-                DriveRb();
-                CommandDest();
+                if (Driving)
+                {
+                    DriveRb();
+                    CommandDest();
+                }
             }
             if (Driving)
+            {
                 DriveShip();
+                CommandShip();
+            }
             StickPawn();
             AimAll();
             TickFire();
+            TickCrew();
+            TickOrbit();
         }
 
         internal static bool TryToggle()
@@ -105,8 +145,11 @@ namespace GroundArsenal
                 Unit next = Nearest(_host);
                 if (next != null && !ReferenceEquals(next, _host) && LookingAt(next))
                 {
+                    bool keepOrbit = _orbit;
                     Dismount();
                     Mount(next, 0);
+                    if (keepOrbit)
+                        EnterOrbit();
                     return true;
                 }
                 Dismount();
@@ -124,9 +167,14 @@ namespace GroundArsenal
             if (Mounted)
             {
                 string wep = WepName(PickStation());
+                string view = _orbit ? "ORBIT" : "SEAT";
+                if (Passenger)
+                    return "F3/F4 PAX  L orbit  T off  " + view;
                 if (Driving)
-                    return "F1 HELM  WASD  TAB " + wep + "  RMB optic  SELECT lock  T off";
-                return "MAN  TAB " + wep + "  RMB optic  SELECT lock  LMB  T off";
+                    return "F1 HELM  WASD  F2 GUN  L orbit  TAB " + wep + "  T off";
+                if (Gunner)
+                    return "F2 GUN  TAB " + wep + "  RMB  SELECT lock  L orbit  T off";
+                return "MAN  TAB " + wep + "  L orbit  T off";
             }
             Unit u = Nearest();
             if (u == null)
@@ -143,6 +191,8 @@ namespace GroundArsenal
         {
             if (Mounted)
                 ReleaseAi();
+            KickCrew();
+            LeaveOrbit();
             GaIff.Stop();
             Mounted = false;
             _host = null;
@@ -150,6 +200,7 @@ namespace GroundArsenal
             _wep = 0;
             _throttle = 0f;
             _steer = 0f;
+            _orbit = false;
             GaCombat.Ads = 0f;
             GaMode.SetWalker(true);
         }
@@ -163,6 +214,36 @@ namespace GroundArsenal
                 cam = GaPerfFrameGate.Cam();
             if (cam == null)
                 return;
+            try
+            {
+                Transform parent = cam.transform.parent;
+                if (parent != null)
+                {
+                    bool sticky = false;
+                    try
+                    {
+                        sticky = mgr.cameraPivot != null && parent == mgr.cameraPivot;
+                    }
+                    catch { }
+                    if (!sticky)
+                    {
+                        try
+                        {
+                            sticky = parent.GetComponent<Rigidbody>() != null
+                                || parent.GetComponent<Unit>() != null;
+                        }
+                        catch { }
+                    }
+                    if (sticky)
+                        cam.transform.SetParent(mgr.transform, true);
+                }
+            }
+            catch { }
+            if (_orbit)
+            {
+                ApplyFakeOrbit(cam);
+                return;
+            }
             cam.transform.position = CamPos();
             cam.transform.rotation = Quaternion.Euler(GaMode.LookPitch, GaMode.LookYaw, 0f);
         }
@@ -174,7 +255,7 @@ namespace GroundArsenal
 
         internal static void InjectPath(GroundVehicle v)
         {
-            if (!Driving || v == null || !object.ReferenceEquals(v, _host))
+            if (!Busy || v == null || !object.ReferenceEquals(v, _host) || !CanHelm(v))
                 return;
             FieldInfo fi = JobFields();
             if (fi == null)
@@ -224,6 +305,9 @@ namespace GroundArsenal
             Unit att = TurretUnit(turret);
             if (att == null || !object.ReferenceEquals(att, _host))
                 return false;
+            int stIx = StationOfTurret(turret);
+            if (Passenger || !CanFire || BotOwnsGun(stIx))
+                return true;
             Vector3 aim = AimFwd();
             try { turret.SetStowed(false); }
             catch { }
@@ -250,7 +334,7 @@ namespace GroundArsenal
 
         internal static bool BlockStationary(GroundVehicle v, bool stationary)
         {
-            return stationary && Driving && v != null && object.ReferenceEquals(v, _host);
+            return stationary && Busy && v != null && CanHelm(v) && object.ReferenceEquals(v, _host);
         }
 
         private static void Mount(Unit u, int seat)
@@ -266,13 +350,14 @@ namespace GroundArsenal
             GaMode.SetWalker(false);
             ArmTurrets(u);
             GaIff.Start(u);
+            _orbit = false;
             string n = UnitName(u);
             if (CanHelm(u))
-                GaMode.Deny(n + "  WASD  TAB  RMB optic  SELECT lock  T off",
-                    n + "  WASD  TAB切武器  右键开镜  锁定  T离开");
+                GaMode.Deny(n + "  F1 helm  F2 gun  F3/F4 pax  L orbit  T off",
+                    n + "  F1驾驶  F2炮手  F3/F4乘客  L环视  T离开");
             else
-                GaMode.Deny(n + "  TAB weapons  RMB optic  SELECT lock  LMB  T off",
-                    n + "  TAB切武器  右键开镜  锁定  开火  T离开");
+                GaMode.Deny(n + "  TAB weapons  L orbit  T off",
+                    n + "  TAB切武器  L环视  T离开");
         }
 
         private static void Dismount()
@@ -280,6 +365,8 @@ namespace GroundArsenal
             Transform pawn = GaMode.PawnRoot;
             Unit u = _host;
             int seat = Seat;
+            KickCrew();
+            LeaveOrbit();
             GaIff.Stop();
             ReleaseAi();
             GaCombat.Ads = 0f;
@@ -300,6 +387,7 @@ namespace GroundArsenal
             _wep = 0;
             _throttle = 0f;
             _steer = 0f;
+            _orbit = false;
             GaMode.SetWalker(true);
             if (u != null)
             {
@@ -326,12 +414,15 @@ namespace GroundArsenal
             else
                 return;
             FillSeats(_host);
-            string lab = Seat == 0 ? "DRIVER" : ("GUN F" + (Seat + 1).ToString());
+            ReassignCrewGuns();
+            string lab = SeatLabel();
             GaMode.Deny(lab, lab);
         }
 
         private static void TickWepKeys()
         {
+            if (Passenger)
+                return;
             if (GaHud.BlocksLook || GaRadio.Open)
                 return;
             int n = StationCount();
@@ -361,11 +452,20 @@ namespace GroundArsenal
             if (_wep >= n)
                 _wep = 0;
             if (_wep != was)
+            {
+                ReassignCrewGuns();
                 GaMode.Deny(WepName(PickStation()), WepName(PickStation()));
+                GaIff.RefreshStation();
+            }
         }
 
         private static void TickAds()
         {
+            if (Passenger)
+            {
+                GaCombat.Ads = Mathf.MoveTowards(GaCombat.Ads, 0f, Time.deltaTime * 7f);
+                return;
+            }
             float dt = Time.deltaTime;
             bool want = !GaHud.BlocksLook && GaVr.Ads();
             GaCombat.Ads = Mathf.MoveTowards(GaCombat.Ads, want ? 1f : 0f, dt * 7f);
@@ -419,7 +519,7 @@ namespace GroundArsenal
 
         private static void AimAll()
         {
-            if (_host == null)
+            if (_host == null || Passenger || !CanFire)
                 return;
             Vector3 aim = AimFwd();
             List<WeaponStation> stations = _host.weaponStations;
@@ -427,32 +527,18 @@ namespace GroundArsenal
                 return;
             for (int i = 0; i < stations.Count; i++)
             {
+                if (BotOwnsGun(i) && i != _wep)
+                    continue;
                 WeaponStation st = stations[i];
                 if (st == null)
                     continue;
-                try { st.SetTurretVector(aim); }
-                catch { }
-                List<Turret> turrets = st.Turrets;
-                if (turrets == null)
-                    continue;
-                for (int t = 0; t < turrets.Count; t++)
-                {
-                    Turret turret = turrets[t];
-                    if (turret == null)
-                        continue;
-                    try { turret.SetStowed(false); }
-                    catch { }
-                    try { turret.SetManual(true); }
-                    catch { }
-                    try { turret.SetVector(aim); }
-                    catch { }
-                }
+                AimStation(st, aim);
             }
         }
 
         private static void TickFire()
         {
-            if (_host == null || GaHud.BlocksLook)
+            if (_host == null || GaHud.BlocksLook || !CanFire)
                 return;
             if (!GaVr.Fire())
                 return;
@@ -594,6 +680,8 @@ namespace GroundArsenal
         {
             if (_host == null)
                 return GaMode.EyePos;
+            if (Passenger)
+                return _host.transform.TransformPoint(_seats[Seat]) + _host.transform.up * 0.45f;
             Turret gun = CurrentTurret();
             if (gun != null && (!Driving || Seat > 0))
                 return gun.transform.position + gun.transform.up * 0.42f + Vector3.up * 0.12f;
@@ -687,8 +775,7 @@ namespace GroundArsenal
                 if (!Driving)
                     return;
                 _heldAi = true;
-                try { ship.SetHoldPosition(false); }
-                catch { }
+                UnstickShip(ship);
                 return;
             }
             GroundVehicle v = u as GroundVehicle;
@@ -711,8 +798,7 @@ namespace GroundArsenal
             Ship ship = _host as Ship;
             if (!Driving || ship == null)
                 return;
-            try { ship.SetHoldPosition(false); }
-            catch { }
+            UnstickShip(ship);
             try
             {
                 ShipInputs inp = ship.GetInputs();
@@ -723,6 +809,469 @@ namespace GroundArsenal
                 }
             }
             catch { }
+            DriveShipRb(ship);
+        }
+
+        private static void UnstickShip(Ship ship)
+        {
+            if (ship == null)
+                return;
+            try { ship.SetHoldPosition(false); }
+            catch { }
+            try { ship.SetLocalSim(true); }
+            catch { }
+            Rigidbody rb = null;
+            try { rb = ship.rb; }
+            catch { rb = null; }
+            if (rb == null)
+                return;
+            try
+            {
+                if (rb.isKinematic)
+                    rb.isKinematic = false;
+            }
+            catch { }
+        }
+
+        private static void DriveShipRb(Ship ship)
+        {
+            if (ship == null)
+                return;
+            Rigidbody rb = null;
+            try { rb = ship.rb; }
+            catch { rb = null; }
+            if (rb == null)
+                return;
+            try
+            {
+                if (rb.isKinematic)
+                    rb.isKinematic = false;
+            }
+            catch { return; }
+            Vector3 fwd = ship.transform.forward;
+            fwd.y = 0f;
+            if (fwd.sqrMagnitude < 0.0001f)
+                fwd = Vector3.forward;
+            else
+                fwd.Normalize();
+            rb.AddForce(fwd * (_throttle * 4.2f), ForceMode.Acceleration);
+            if (Mathf.Abs(_steer) > 0.04f)
+                rb.AddTorque(Vector3.up * (_steer * 0.22f), ForceMode.Acceleration);
+        }
+
+        private static void CommandShip()
+        {
+            Ship ship = _host as Ship;
+            if (!Driving || ship == null)
+                return;
+            if (Mathf.Abs(_throttle) < 0.12f && Mathf.Abs(_steer) < 0.12f)
+                return;
+            if (Time.unscaledTime < _nextDest)
+                return;
+            _nextDest = Time.unscaledTime + 0.4f;
+            Vector3 fwd = ship.transform.forward;
+            fwd.y = 0f;
+            if (fwd.sqrMagnitude < 0.0001f)
+                fwd = Vector3.forward;
+            else
+                fwd.Normalize();
+            Vector3 dir = Quaternion.AngleAxis(_steer * 40f, Vector3.up) * fwd;
+            if (_throttle < -0.12f)
+                dir = -dir;
+            Vector3 dest = ship.transform.position + dir * (90f + Mathf.Abs(_throttle) * 240f);
+            dest.y = ship.transform.position.y;
+            try
+            {
+                UnitCommand cmd = ship.UnitCommand;
+                if (cmd != null)
+                    cmd.SetDestination(dest.ToGlobalPosition(), true);
+            }
+            catch { }
+        }
+
+        private static Ship ShipOf(ShipAI ai)
+        {
+            if (ai == null)
+                return null;
+            if (_aiShip == null)
+                _aiShip = AccessTools.Field(typeof(ShipAI), "ship");
+            if (_aiShip != null)
+            {
+                try
+                {
+                    Ship s = _aiShip.GetValue(ai) as Ship;
+                    if (s != null)
+                        return s;
+                }
+                catch { }
+            }
+            try { return ai.GetComponentInParent<Ship>(); }
+            catch { return null; }
+        }
+
+        internal static void StickBot(GaDropBot bot)
+        {
+            if (bot == null || _host == null)
+                return;
+            int seat = bot.RideSeat;
+            if (seat < 0 || seat >= SeatCount)
+                seat = 2;
+            bot.transform.position = _host.transform.TransformPoint(_seats[seat]);
+            bot.transform.rotation = _host.transform.rotation;
+        }
+
+        internal static bool TryBoardBot(GaDropBot bot)
+        {
+            if (!Busy || bot == null || _host == null)
+                return false;
+            if (bot.Downed || bot.Hp <= 0f || bot.Falling)
+                return false;
+            if (bot.Kit == GaKitId.Tsf)
+                return false;
+            if (bot.RideHost != null)
+                return object.ReferenceEquals(bot.RideHost, _host);
+            float lim = _host is Ship ? 625f : 220f;
+            float d = (bot.transform.position - _host.transform.position).sqrMagnitude;
+            if (d > lim)
+                return false;
+            int seat = FreeSeat();
+            if (seat < 0)
+                return false;
+            bot.Board(_host, seat, FreeGun());
+            _crew.Add(bot);
+            return true;
+        }
+
+        private static void TickCrew()
+        {
+            if (!Busy || _host == null)
+                return;
+            if (Time.unscaledTime >= _nextInvite)
+            {
+                _nextInvite = Time.unscaledTime + 0.45f;
+                GaDropSquad.InviteTo(_host);
+            }
+            for (int i = _crew.Count - 1; i >= 0; i--)
+            {
+                GaDropBot b = _crew[i];
+                if (b == null || b.Downed || b.Hp <= 0f
+                    || !object.ReferenceEquals(b.RideHost, _host))
+                {
+                    if (b != null)
+                        b.ClearRide();
+                    _crew.RemoveAt(i);
+                    continue;
+                }
+                StickBot(b);
+                if (b.RideGun < 0 || GaHud.BlocksLook)
+                    continue;
+                if (Time.time < b.RideNextFire)
+                    continue;
+                WeaponStation st = StationAt(b.RideGun);
+                if (st == null)
+                    continue;
+                Unit tgt = CrewTarget();
+                Vector3 aim = tgt != null ? TargetPoint(tgt) : AimFwd();
+                AimStation(st, aim);
+                bool missile = IsMissile(st);
+                if (missile && tgt == null)
+                    continue;
+                FireStation(st, tgt, aim);
+                b.RideNextFire = Time.time + (missile ? 0.7f : 0.22f);
+            }
+        }
+
+        private static void KickCrew()
+        {
+            Unit u = _host;
+            for (int i = 0; i < _crew.Count; i++)
+            {
+                GaDropBot b = _crew[i];
+                if (b == null)
+                    continue;
+                if (u != null)
+                {
+                    Vector3 side = ((i & 1) == 0 ? -u.transform.right : u.transform.right);
+                    float off = u is Ship ? 8.5f : 2.4f;
+                    Vector3 p = u.transform.position + side * off + u.transform.up * 0.4f;
+                    RaycastHit hit;
+                    if (GaPhys.RayDown(p + Vector3.up * 4f, 14f, out hit))
+                        p = hit.point + Vector3.up * 0.08f;
+                    b.transform.position = p;
+                }
+                b.ClearRide();
+            }
+            _crew.Clear();
+        }
+
+        private static void ReassignCrewGuns()
+        {
+            for (int i = 0; i < _crew.Count; i++)
+            {
+                GaDropBot b = _crew[i];
+                if (b == null)
+                    continue;
+                if (b.RideGun >= 0 && CanFire && b.RideGun == _wep)
+                    b.RideGun = -1;
+            }
+            for (int i = 0; i < _crew.Count; i++)
+            {
+                GaDropBot b = _crew[i];
+                if (b == null)
+                    continue;
+                if (b.RideGun < 0)
+                    b.RideGun = FreeGun();
+            }
+        }
+
+        private static int FreeSeat()
+        {
+            bool[] taken = new bool[SeatCount];
+            taken[Seat] = true;
+            taken[0] = true;
+            for (int i = 0; i < _crew.Count; i++)
+            {
+                GaDropBot b = _crew[i];
+                if (b == null)
+                    continue;
+                if (b.RideSeat >= 0 && b.RideSeat < SeatCount)
+                    taken[b.RideSeat] = true;
+            }
+            for (int s = 1; s < SeatCount; s++)
+            {
+                if (!taken[s])
+                    return s;
+            }
+            return -1;
+        }
+
+        private static int FreeGun()
+        {
+            int n = StationCount();
+            if (n <= 0)
+                return -1;
+            for (int i = 0; i < n; i++)
+            {
+                if (CanFire && i == _wep)
+                    continue;
+                if (BotOwnsGun(i))
+                    continue;
+                return i;
+            }
+            return -1;
+        }
+
+        private static bool BotOwnsGun(int gun)
+        {
+            if (gun < 0)
+                return false;
+            for (int i = 0; i < _crew.Count; i++)
+            {
+                GaDropBot b = _crew[i];
+                if (b != null && b.RideGun == gun)
+                    return true;
+            }
+            return false;
+        }
+
+        private static WeaponStation StationAt(int ix)
+        {
+            List<WeaponStation> stations = _host != null ? _host.weaponStations : null;
+            if (stations == null || ix < 0 || ix >= stations.Count)
+                return null;
+            return stations[ix];
+        }
+
+        private static int StationOfTurret(Turret turret)
+        {
+            List<WeaponStation> stations = _host != null ? _host.weaponStations : null;
+            if (stations == null || turret == null)
+                return -1;
+            for (int i = 0; i < stations.Count; i++)
+            {
+                WeaponStation st = stations[i];
+                if (st == null || st.Turrets == null)
+                    continue;
+                for (int t = 0; t < st.Turrets.Count; t++)
+                {
+                    if (object.ReferenceEquals(st.Turrets[t], turret))
+                        return i;
+                }
+            }
+            return -1;
+        }
+
+        private static void AimStation(WeaponStation st, Vector3 aim)
+        {
+            if (st == null)
+                return;
+            try { st.SetTurretVector(aim); }
+            catch { }
+            List<Turret> turrets = st.Turrets;
+            if (turrets == null)
+                return;
+            for (int t = 0; t < turrets.Count; t++)
+            {
+                Turret turret = turrets[t];
+                if (turret == null)
+                    continue;
+                try { turret.SetStowed(false); }
+                catch { }
+                try { turret.SetManual(true); }
+                catch { }
+                try { turret.SetVector(aim); }
+                catch { }
+            }
+        }
+
+        private static void FireStation(WeaponStation st, Unit tgt, Vector3 aim)
+        {
+            if (st == null || _host == null)
+                return;
+            try
+            {
+                if (tgt != null)
+                {
+                    try { st.SetStationTargets(new PersistentID[] { tgt.persistentID }); }
+                    catch { }
+                }
+                st.SetTurretVector(aim);
+                st.Fire(_host, tgt);
+            }
+            catch
+            {
+                try { st.RemoteFireSingle(_host); }
+                catch { }
+            }
+        }
+
+        private static Unit CrewTarget()
+        {
+            Unit tgt = GaIff.Primary();
+            if (tgt != null && !tgt.disabled)
+                return tgt;
+            return AimHostile();
+        }
+
+        private static Vector3 TargetPoint(Unit u)
+        {
+            if (u == null)
+                return AimFwd();
+            try { return u.GetCenterOfMass(); }
+            catch { return u.transform.position; }
+        }
+
+        private static string SeatLabel()
+        {
+            if (Seat <= 0)
+                return "F1 DRIVER";
+            if (Seat == 1)
+                return "F2 GUN";
+            return "F" + (Seat + 1).ToString() + " PASSENGER";
+        }
+
+        private static void TickOrbit()
+        {
+            if (!Busy || GaHud.BlocksLook || GaRadio.Open)
+                return;
+            if (Time.unscaledTime < _orbitToggleUntil)
+                return;
+            bool press = Input.GetKeyDown(KeyCode.L);
+            try
+            {
+                Rewired.Player inp = GameManager.playerInput;
+                if (inp != null && inp.GetButtonDown("Switch View"))
+                    press = true;
+            }
+            catch { }
+            if (!press)
+                return;
+            _orbitToggleUntil = Time.unscaledTime + 0.18f;
+            if (_orbit)
+                LeaveOrbit();
+            else
+                EnterOrbit();
+        }
+
+        private static void EnterOrbit()
+        {
+            _orbit = true;
+            DetachCam();
+            try { FlightHud.EnableCanvas(true); }
+            catch { }
+            GaMode.Deny("ORBIT", "环视");
+        }
+
+        private static void LeaveOrbit()
+        {
+            bool was = _orbit;
+            _orbit = false;
+            DetachCam();
+            if (!was)
+                return;
+            GaMode.Deny("SEAT", "座位");
+        }
+
+        private static void DetachCam()
+        {
+            CameraStateManager mgr = null;
+            try { mgr = SceneSingleton<CameraStateManager>.i; }
+            catch { mgr = null; }
+            if (mgr == null)
+                return;
+            try
+            {
+                if (mgr.cameraPivot != null)
+                    mgr.cameraPivot.SetParent(null, true);
+            }
+            catch { }
+            try
+            {
+                if (mgr.mainCamera != null)
+                    mgr.mainCamera.transform.SetParent(mgr.transform, true);
+            }
+            catch { }
+            try
+            {
+                CameraBaseState cur = mgr.currentState;
+                if (cur == mgr.orbitState || cur == mgr.cockpitState || cur == mgr.chaseState
+                    || cur == mgr.TVState)
+                    mgr.SwitchState(mgr.freeState);
+            }
+            catch { }
+            try { CameraStateManager.cameraMode = CameraMode.free; }
+            catch { }
+            try { CameraStateManager.enableMouseLook = false; }
+            catch { }
+            try
+            {
+                if (mgr.mainCamera != null && mgr.mainCamera.nearClipPlane > 0.08f)
+                    mgr.mainCamera.nearClipPlane = 0.03f;
+            }
+            catch { }
+        }
+
+        private static void ApplyFakeOrbit(Camera cam)
+        {
+            if (cam == null || _host == null)
+                return;
+            float dist = _host is Ship ? 42f : 11f;
+            float lift = _host is Ship ? 14f : 3.2f;
+            try
+            {
+                float r = _host.maxRadius;
+                if (r > 4f)
+                    dist = Mathf.Clamp(r * 2.4f, 8f, 80f);
+            }
+            catch { }
+            Vector3 back = Quaternion.Euler(GaMode.LookPitch, GaMode.LookYaw, 0f)
+                * new Vector3(0f, 0f, -dist);
+            Vector3 at = _host.transform.position + Vector3.up * lift;
+            cam.transform.position = at + back;
+            Vector3 look = at - cam.transform.position;
+            if (look.sqrMagnitude < 0.01f)
+                look = -_host.transform.forward;
+            cam.transform.rotation = Quaternion.LookRotation(look.normalized, Vector3.up);
         }
 
         private static void KeepLoose()

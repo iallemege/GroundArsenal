@@ -222,7 +222,7 @@ namespace GroundArsenal
             return false;
         }
 
-        internal static void Tick(Transform parent, float speed, bool dead)
+        internal static void Tick(Transform parent, float speed, bool dead, bool seated = false)
         {
             if (parent == null)
                 return;
@@ -232,10 +232,10 @@ namespace GroundArsenal
             GaBodyPose driver = body.GetComponent<GaBodyPose>();
             if (driver == null)
                 driver = body.gameObject.AddComponent<GaBodyPose>();
-            driver.Speed = speed;
+            driver.Speed = seated ? 0f : speed;
             driver.Dead = dead;
             driver.EnsureAnim();
-            Drive(driver, speed, dead);
+            Drive(driver, seated ? 0f : speed, dead, seated);
         }
 
         internal static void SkinCapsule(Renderer r, Color col)
@@ -325,7 +325,7 @@ namespace GroundArsenal
             vis.localPosition = new Vector3(0f, lp.y, 0f);
         }
 
-        private static void Drive(GaBodyPose driver, float speed, bool dead)
+        private static void Drive(GaBodyPose driver, float speed, bool dead, bool seated = false)
         {
             if (driver == null)
                 return;
@@ -335,7 +335,7 @@ namespace GroundArsenal
                 return;
             try
             {
-                anim.SetBool("isSeated", false);
+                anim.SetBool("isSeated", seated);
                 anim.SetBool("isEjecting1", false);
                 anim.SetBool("isDetaching", false);
                 anim.SetBool("isParachuting", false);
