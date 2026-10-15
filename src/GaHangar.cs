@@ -24,7 +24,7 @@ namespace GroundArsenal
         internal static bool DeathPick;
         internal static bool FieldOpen;
         private static int _fieldFrame;
-        private static AircraftSelectionMenu _menu;
+        private static AircraftSelectionMenu _menu, _hidden;
         private static float _menuAt;
         private static Airbase _ab;
         private static float _abAt;
@@ -110,8 +110,6 @@ namespace GroundArsenal
                 _menuOpen = false;
                 return;
             }
-            if (DeathPick && !hangar)
-                _menuOpen = true;
             DrawSpawnVisor(DeathPick);
             DrawChip();
             if (GaHud.CatalogOpen)
@@ -187,6 +185,7 @@ namespace GroundArsenal
             AircraftSelectionMenu menu = CachedMenu();
             if (menu != null)
             {
+                _hidden = menu;
                 try { menu.gameObject.SetActive(false); }
                 catch { }
             }
@@ -206,6 +205,46 @@ namespace GroundArsenal
         internal static void ClearDeath()
         {
             DeathPick = false;
+        }
+
+        /// <summary>Undoes what OpenDeath hid: the game's aircraft selection comes back with the cursor.</summary>
+        private static void ShowVanillaSelection()
+        {
+            try
+            {
+                GameplayUI ui = SceneSingleton<GameplayUI>.i;
+                if (ui != null && GameplaySelMenu != null)
+                {
+                    GameObject go = GameplaySelMenu.GetValue(ui) as GameObject;
+                    if (go != null)
+                        go.SetActive(true);
+                }
+            }
+            catch { }
+            AircraftSelectionMenu menu = _hidden;
+            if (menu == null)
+            {
+                try
+                {
+                    foreach (AircraftSelectionMenu m in Resources.FindObjectsOfTypeAll<AircraftSelectionMenu>())
+                        if (m != null && m.gameObject.scene.IsValid()) { menu = m; break; }
+                }
+                catch { }
+            }
+            _hidden = null;
+            if (menu != null)
+            {
+                try { menu.gameObject.SetActive(true); }
+                catch { }
+            }
+            try { CursorManager.SetFlag(CursorFlags.SelectionMenu, true); }
+            catch { }
+            try
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+            catch { }
         }
 
         private static void DrawChip()
@@ -228,6 +267,12 @@ namespace GroundArsenal
                 {
                     if (GaHud.CatalogOpen)
                         GaHud.CloseMenus();
+                    // Leaving the death pick hands the respawn back to the game's own aircraft selection.
+                    if (DeathPick)
+                    {
+                        ClearDeath();
+                        ShowVanillaSelection();
+                    }
                 }
             }
             GUI.backgroundColor = prevBg;
